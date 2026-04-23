@@ -1,0 +1,44 @@
+from __future__ import annotations
+
+import json
+import time
+from typing import Any
+
+from sim_ext_core.base import BridgePlugin
+
+_QOS = "sensor_data"
+
+
+class JointStatesBridge(BridgePlugin):
+
+    def __init__(self, articulation: Any, config: Any, entry: Any) -> None:
+        self._articulation = articulation
+        self._node_name: str = config.node_name
+        self._robot_name: str = entry.robot_name
+        self._topic: str = entry.topic
+
+    def setup(self) -> bool:
+        return self._articulation.setup()
+
+    def teardown(self) -> None:
+        pass  # articulation lifecycle is managed by the extension, not the plugin
+
+    def on_step(self, step: int, io: Any) -> None:
+        states = self._articulation.get_joint_states()
+        if states is None:
+            return
+        positions, velocities = states
+        payload = json.dumps(
+            {
+                "robot": self._robot_name,
+                "step": step,
+                "positions": positions,
+                "velocities": velocities,
+                "stamp": time.time(),
+            }
+        ).encode()
+        io.emit(self._node_name, self._topic, _QOS, payload)
+
+    @property
+    def is_ready(self) -> bool:
+        return self._articulation.is_ready
