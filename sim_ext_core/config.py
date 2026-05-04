@@ -159,7 +159,15 @@ def _normalise_params(raw: Any, entry_type: str) -> dict[str, Any]:
 
 
 def _read_jsonc(path: Path) -> dict[str, Any]:
-    """Parses JSON with full-line // comments only. Inline comments not supported."""
-    lines = path.read_text().splitlines()
-    stripped = "\n".join(line for line in lines if not line.strip().startswith("//"))
+    text = path.read_text()
+    try:
+        import pyjson5  # pylint: disable=E0401
+        return pyjson5.loads(text)
+    except ImportError:
+        pass
+    # Fallback: strip // full-line comments and parse as standard JSON.
+    # Does not handle JSON5 unquoted keys — install pyjson5 for full support.
+    stripped = "\n".join(
+        line for line in text.splitlines() if not line.strip().startswith("//")
+    )
     return json.loads(stripped)
