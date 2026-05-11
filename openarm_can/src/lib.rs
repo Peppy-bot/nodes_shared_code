@@ -40,6 +40,16 @@ pub mod v10 {
 
     /// A fixed-length array of one `f64` per arm joint.
     pub type JointVec = [f64; ARM_DOF];
+
+    pub const GRIPPER_MOTOR_TYPE: MotorType = MotorType::DM4310;
+    pub const GRIPPER_SEND_ID: u32 = 0x08;
+    pub const GRIPPER_RECV_ID: u32 = 0x18;
+
+    // joint=0 m (closed) ↔ motor=0 rad, joint=GRIPPER_OPEN_M ↔ motor=GRIPPER_OPEN_RAD.
+    // Values match ROS2 openarm/v10_simple_hardware.
+    pub const GRIPPER_OPEN_M: f64 = 0.044;
+    #[allow(clippy::approx_constant)]
+    pub const GRIPPER_OPEN_RAD: f64 = -1.0472;
 }
 
 /// Damiao motor callback mode. Controls which CAN frames the firmware emits.
@@ -49,6 +59,14 @@ pub enum CallbackMode {
     State = 0,
     Param = 1,
     Ignore = 2,
+}
+
+/// State of the gripper motor from the most recent `recv_all`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GripperState {
+    pub position: f64,
+    pub velocity: f64,
+    pub torque: f64,
 }
 
 /// State of all arm joints from the most recent `recv_all`.
@@ -191,6 +209,46 @@ impl ArmCan {
                 state.velocities.as_mut_ptr(),
                 state.torques.as_mut_ptr(),
                 v10::ARM_DOF as i32,
+            );
+        }
+        state
+    }
+}
+
+/// 1 DOF gripper. Open with [`GripperCan::new`].
+pub struct GripperCan(CanHandle);
+
+impl GripperCan {
+    pub fn new(can_interface: &str, enable_fd: bool) -> Result<Self> {
+        Ok(Self(CanHandle::new(can_interface, enable_fd)?))
+    }
+
+    pub fn init_motor(&mut self, motor_type: MotorType, send_id: u32, recv_id: u32) {
+        unsafe {
+            inner::openarm_init_gripper_motor(self.0.handle, motor_type as u8, send_id, recv_id);
+        }
+    }
+
+    pub fn enable_all(&mut self) { self.0.enable_all() }
+    pub fn disable_all(&mut self) { self.0.disable_all() }
+    pub fn recv_all(&mut self, first_timeout_us: i32) { self.0.recv_all(first_timeout_us) }
+    pub fn refresh_all(&mut self) { self.0.refresh_all() }
+    pub fn set_callback_mode(&mut self, mode: CallbackMode) { self.0.set_callback_mode(mode) }
+
+    pub fn mit_control(&mut self, kp: f64, kd: f64, q: f64, dq: f64, tau: f64) {
+        unsafe { inner::openarm_gripper_mit_control(self.0.handle, kp, kd, q, dq, tau) }
+    }
+
+    /// Snapshot of gripper state from the most recent `recv_all`.
+    /// Calls `std::abort` (via C++) if [`init_motor`](Self::init_motor) has not been called.
+    pub fn get_state(&self) -> GripperState {
+        let mut state = GripperState::default();
+        unsafe {
+            inner::openarm_gripper_get_state(
+                self.0.handle,
+                &mut state.position,
+                &mut state.velocity,
+                &mut state.torque,
             );
         }
         state

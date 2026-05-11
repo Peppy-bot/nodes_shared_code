@@ -39,6 +39,23 @@ void openarm_arm_get_state(OpenArmHandle h,
                            double* torques,
                            int count);
 
+void openarm_init_gripper_motor(OpenArmHandle h,
+                                uint8_t motor_type,
+                                uint32_t send_can_id,
+                                uint32_t recv_can_id);
+
+void openarm_gripper_mit_control(OpenArmHandle h,
+                                 double kp,
+                                 double kd,
+                                 double q,
+                                 double dq,
+                                 double tau);
+
+void openarm_gripper_get_state(OpenArmHandle h,
+                               double* position,
+                               double* velocity,
+                               double* torque);
+
 #ifdef __cplusplus
 }
 #endif

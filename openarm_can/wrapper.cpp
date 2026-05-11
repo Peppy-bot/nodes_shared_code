@@ -1,4 +1,4 @@
-// C wrapper around openarm::can::socket::OpenArm (arm motors).
+// C wrapper around openarm::can::socket::OpenArm (arm + gripper motors).
 // Only compiled on Linux where libopenarm-can-dev is available.
 #include "wrapper.h"
 
@@ -110,6 +110,43 @@ void openarm_arm_get_state(OpenArmHandle h,
         velocities[i] = motors[i].get_velocity();
         torques[i]    = motors[i].get_torque();
     }
+}
+
+void openarm_init_gripper_motor(OpenArmHandle h,
+                                uint8_t motor_type,
+                                uint32_t send_can_id,
+                                uint32_t recv_can_id) {
+    auto* arm = static_cast<OA*>(h);
+    arm->init_gripper_motor(
+        static_cast<openarm::damiao_motor::MotorType>(motor_type),
+        send_can_id,
+        recv_can_id);
+}
+
+void openarm_gripper_mit_control(OpenArmHandle h,
+                                 double kp,
+                                 double kd,
+                                 double q,
+                                 double dq,
+                                 double tau) {
+    auto* arm = static_cast<OA*>(h);
+    arm->get_gripper().mit_control_all({{kp, kd, q, dq, tau}});
+}
+
+void openarm_gripper_get_state(OpenArmHandle h,
+                               double* position,
+                               double* velocity,
+                               double* torque) {
+    auto* arm = static_cast<OA*>(h);
+    const auto& motors = arm->get_gripper().get_motors();
+    if (motors.empty()) {
+        std::cerr << "openarm_gripper_get_state: gripper motor not initialized "
+                     "(init_motor not called?)" << std::endl;
+        std::abort();
+    }
+    *position = motors[0].get_position();
+    *velocity = motors[0].get_velocity();
+    *torque   = motors[0].get_torque();
 }
 
 } // extern "C"
