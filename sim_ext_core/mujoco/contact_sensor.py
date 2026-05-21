@@ -7,13 +7,16 @@ logger = logging.getLogger(__name__)
 
 
 class MujocoContactSensor:
-    """Reads active contact forces involving a named MuJoCo body.
+    """Reads active contact forces from a MuJoCo scene.
 
-    Iterates data.contact for active contacts where either contacting geom
-    belongs to the target body.  Forces are reported in world frame via
-    mj_contactForce + the contact rotation matrix.
+    When body_name is provided, returns only contacts that involve that
+    body. When body_name is empty, returns every active contact in the
+    scene — used by per-stack publishers where the consumer filters on
+    its own side.
 
-    Returns an empty list when no contacts are active — not an error.
+    Forces are reported in world frame via mj_contactForce + the contact
+    rotation matrix. Returns an empty list when no contacts are active —
+    not an error.
     """
 
     def __init__(self, model, data, body_name: str) -> None:
@@ -24,8 +27,15 @@ class MujocoContactSensor:
         self._ready: bool = False
 
     def setup(self) -> bool:
-        """Resolve body ID from the MuJoCo model."""
+        """Resolve body ID from the MuJoCo model (no-op in all-contacts mode)."""
         try:
+            if not self._body_name:
+                # All-contacts mode — no body to resolve.
+                self._body_id = None
+                self._ready = True
+                logger.info("MujocoContactSensor ready — body=<all> (no filter)")
+                return True
+
             import mujoco  # pylint: disable=E0401
 
             body_id = mujoco.mj_name2id(
@@ -54,10 +64,10 @@ class MujocoContactSensor:
         self._body_id = None
 
     def get_contact_data(self) -> Optional[list[dict]]:
-        """Return active contacts involving the target body.
+        """Return active contacts, optionally filtered to the target body.
 
-        Each entry: body1 (geom name), body2 (geom name), position (3),
-        force (3, world frame).
+        Each entry: body1, body2 (MJCF body names — geom→body lookup),
+        position (3, world frame), force (3, world frame).
         """
         if not self._ready:
             return None
@@ -71,7 +81,7 @@ class MujocoContactSensor:
                 contact = self._data.contact[i]
                 geom1_body = int(self._model.geom_bodyid[contact.geom1])
                 geom2_body = int(self._model.geom_bodyid[contact.geom2])
-                if self._body_id not in (geom1_body, geom2_body):
+                if self._body_id is not None and self._body_id not in (geom1_body, geom2_body):
                     continue
 
                 # mj_contactForce returns 6-DOF wrench in contact frame.
@@ -81,23 +91,23 @@ class MujocoContactSensor:
                 frame = contact.frame.reshape(3, 3)
                 force_world = frame @ force_contact[:3]
 
-                geom1_name = (
+                body1_name = (
                     mujoco.mj_id2name(
-                        self._model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom1
+                        self._model, mujoco.mjtObj.mjOBJ_BODY, geom1_body
                     )
-                    or f"geom_{contact.geom1}"
+                    or f"body_{geom1_body}"
                 )
-                geom2_name = (
+                body2_name = (
                     mujoco.mj_id2name(
-                        self._model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2
+                        self._model, mujoco.mjtObj.mjOBJ_BODY, geom2_body
                     )
-                    or f"geom_{contact.geom2}"
+                    or f"body_{geom2_body}"
                 )
 
                 contacts.append(
                     {
-                        "body1": geom1_name,
-                        "body2": geom2_name,
+                        "body1": body1_name,
+                        "body2": body2_name,
                         "position": contact.pos.tolist(),
                         "force": force_world.tolist(),
                     }
@@ -109,5 +119,5 @@ class MujocoContactSensor:
 
     @property
     def is_ready(self) -> bool:
-        """True when body ID has been resolved."""
+        """True when body ID has been resolved (or all-contacts mode is active)."""
         return self._ready
