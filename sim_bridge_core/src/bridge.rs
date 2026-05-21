@@ -45,7 +45,7 @@ pub struct SimBridge<Runner> {
     pipelines: Vec<Pipeline>,
 }
 
-impl<Runner: Clone + Send + Sync + 'static> SimBridge<Runner> {
+impl<Runner: Send + Sync + 'static> SimBridge<Runner> {
     pub fn new(
         runner: Arc<Runner>,
         daemon: DaemonState,
