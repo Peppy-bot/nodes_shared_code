@@ -38,6 +38,7 @@ class SubscriberEntry:
     prim: str
     topic: str
     source_node: str = "sim_bridge"
+    params: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -80,6 +81,7 @@ class BridgeConfig:
                         prim=e.get("prim", ""),
                         topic=e.get("topic", e["type"]),
                         source_node=e.get("source_node", "sim_bridge"),
+                        params=_normalise_params(e.get("params"), e["type"]),
                     )
                     for e in raw.get("subscribers", [])
                 ],
@@ -108,9 +110,9 @@ class BridgeConfig:
             ],
             subscribers=[
                 SubscriberEntry(
-                    type="joint_command",
+                    type="actuator_ctrl",
                     prim=prim,
-                    topic=os.environ.get(_ENV_COMMAND_TOPIC, "joint_command"),
+                    topic=os.environ.get(_ENV_COMMAND_TOPIC, "set_ctrl"),
                     source_node=os.environ.get(_ENV_COMMAND_SOURCE_NODE, "sim_bridge"),
                 )
             ],
