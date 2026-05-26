@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,9 @@ class IsaacActuatorCtrl:
             )
             self._view.initialize()
             dof_names = list(self._view.dof_names)
-            self._name_to_idx = {n: i for i, n in enumerate(dof_names) if n in self._joint_names}
+            self._name_to_idx = {
+                n: i for i, n in enumerate(dof_names) if n in self._joint_names
+            }
             missing = [n for n in self._joint_names if n not in self._name_to_idx]
             if missing:
                 logger.warning(
@@ -75,7 +76,9 @@ class IsaacActuatorCtrl:
             for name, value in actuator_values.items():
                 idx = self._name_to_idx.get(name)
                 if idx is None:
-                    logger.warning(f"unknown actuator '{name}' on '{self._prim_path}' — dropped")
+                    logger.warning(
+                        f"unknown actuator '{name}' on '{self._prim_path}' — dropped"
+                    )
                     continue
                 indices.append(idx)
                 values.append(float(value))

@@ -164,6 +164,7 @@ def _read_jsonc(path: Path) -> dict[str, Any]:
     text = path.read_text()
     try:
         import pyjson5  # pylint: disable=E0401
+
         return pyjson5.loads(text)
     except ImportError:
         pass

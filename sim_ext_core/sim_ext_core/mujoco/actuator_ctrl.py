@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +26,10 @@ class MujocoActuatorCtrl:
 
             name_to_id: dict[str, int] = {}
             for i in range(self._model.nu):
-                name = mujoco.mj_id2name(
-                    self._model, mujoco.mjtObj.mjOBJ_ACTUATOR, i
-                ) or ""
+                name = (
+                    mujoco.mj_id2name(self._model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
+                    or ""
+                )
                 if name:
                     name_to_id[name] = i
             self._name_to_id = name_to_id

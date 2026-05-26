@@ -81,7 +81,10 @@ class MujocoContactSensor:
                 contact = self._data.contact[i]
                 geom1_body = int(self._model.geom_bodyid[contact.geom1])
                 geom2_body = int(self._model.geom_bodyid[contact.geom2])
-                if self._body_id is not None and self._body_id not in (geom1_body, geom2_body):
+                if self._body_id is not None and self._body_id not in (
+                    geom1_body,
+                    geom2_body,
+                ):
                     continue
 
                 # mj_contactForce returns 6-DOF wrench in contact frame.
@@ -92,15 +95,11 @@ class MujocoContactSensor:
                 force_world = frame @ force_contact[:3]
 
                 body1_name = (
-                    mujoco.mj_id2name(
-                        self._model, mujoco.mjtObj.mjOBJ_BODY, geom1_body
-                    )
+                    mujoco.mj_id2name(self._model, mujoco.mjtObj.mjOBJ_BODY, geom1_body)
                     or f"body_{geom1_body}"
                 )
                 body2_name = (
-                    mujoco.mj_id2name(
-                        self._model, mujoco.mjtObj.mjOBJ_BODY, geom2_body
-                    )
+                    mujoco.mj_id2name(self._model, mujoco.mjtObj.mjOBJ_BODY, geom2_body)
                     or f"body_{geom2_body}"
                 )
 
