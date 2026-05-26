@@ -20,18 +20,37 @@ class MujocoActuatorCtrl:
         self._ready: bool = False
 
     def setup(self) -> bool:
-        """Build the actuator-name → ctrl-id map from the model."""
+        """Build the name → ctrl-id map.
+
+        Accepts both the MJCF actuator name and the joint name the actuator
+        drives, so callers can address ctrl indices by either. The joint name
+        is the cross-engine canonical key (Isaac's dof_names are joint names),
+        which lets components ship one payload shape that works on both engines.
+        """
         try:
             import mujoco  # pylint: disable=E0401
 
             name_to_id: dict[str, int] = {}
+            joint_aliases = 0
             for i in range(self._model.nu):
-                name = (
+                actuator_name = (
                     mujoco.mj_id2name(self._model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
                     or ""
                 )
-                if name:
-                    name_to_id[name] = i
+                if actuator_name:
+                    name_to_id[actuator_name] = i
+                if int(self._model.actuator_trntype[i]) != int(
+                    mujoco.mjtTrn.mjTRN_JOINT
+                ):
+                    continue
+                trnid = int(self._model.actuator_trnid[i, 0])
+                joint_name = (
+                    mujoco.mj_id2name(self._model, mujoco.mjtObj.mjOBJ_JOINT, trnid)
+                    or ""
+                )
+                if joint_name and joint_name not in name_to_id:
+                    name_to_id[joint_name] = i
+                    joint_aliases += 1
             self._name_to_id = name_to_id
             self._ready = True
         except Exception as exc:
@@ -39,7 +58,8 @@ class MujocoActuatorCtrl:
             return False
 
         logger.info(
-            f"MujocoActuatorCtrl ready — {len(self._name_to_id)} actuator(s) resolved"
+            f"MujocoActuatorCtrl ready — {self._model.nu} actuator(s) resolved"
+            f" ({joint_aliases} joint-name aliases)"
         )
         return True
 
