@@ -8,6 +8,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Bound for explicit step requests so a malformed caller can't block the control
+# path with a tight loop of mj_step calls.
+_MAX_STEPS_PER_REQUEST = 1000
+
 
 class MujocoSimControl:
     """MuJoCo implementation of simulator control operations.
@@ -56,6 +60,15 @@ class MujocoSimControl:
                 "steps_executed": 0,
                 "sim_time": float(self._data.time),
             }
+        if num_steps > _MAX_STEPS_PER_REQUEST:
+            return {
+                "success": False,
+                "steps_executed": 0,
+                "sim_time": float(self._data.time),
+                "message": (
+                    f"num_steps={num_steps} exceeds cap {_MAX_STEPS_PER_REQUEST}"
+                ),
+            }
         try:
             import mujoco  # pylint: disable=E0401
 
@@ -91,6 +104,9 @@ class MujocoSimControl:
         try:
             import mujoco  # pylint: disable=E0401
 
+            # Pre-validate all joint name lookups so we don't apply a partial
+            # write (some joints updated, others rejected) on the first miss.
+            resolved: list[tuple[int, float]] = []
             for name, pos in zip(joint_names, positions):
                 jid = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_JOINT, name)
                 if jid == -1:
@@ -98,7 +114,9 @@ class MujocoSimControl:
                         "success": False,
                         "message": f"Joint '{name}' not found in MuJoCo model",
                     }
-                self._data.qpos[self._model.jnt_qposadr[jid]] = pos
+                resolved.append((int(self._model.jnt_qposadr[jid]), pos))
+            for qpos_adr, pos in resolved:
+                self._data.qpos[qpos_adr] = pos
             mujoco.mj_forward(self._model, self._data)
             logger.info(f"MuJoCo: set joint positions for '{arm}' arm — {positions}")
             return {"success": True, "message": f"Joint positions set for '{arm}' arm"}

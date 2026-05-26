@@ -4,7 +4,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .articulation import ArticulationBridge
+    from .articulation import IsaacArticulation
 
 logger = logging.getLogger(__name__)
 
@@ -12,12 +12,12 @@ logger = logging.getLogger(__name__)
 class IsaacSimControl:
     """Isaac Sim implementation of simulator control operations.
 
-    Uses the shared ArticulationBridge for set_joint_positions.
+    Uses the shared IsaacArticulation for set_joint_positions.
     Pause and reset delegate to the Isaac Sim timeline interface.
     step_sim is not supported in the callback-driven Isaac Sim model.
     """
 
-    def __init__(self, articulation: "ArticulationBridge", timeline) -> None:
+    def __init__(self, articulation: "IsaacArticulation", timeline) -> None:
         self._articulation = articulation
         self._timeline = timeline
 

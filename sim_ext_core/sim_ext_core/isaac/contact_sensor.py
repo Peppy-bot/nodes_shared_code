@@ -43,9 +43,14 @@ class IsaacContactSensor:
             import omni.usd  # pylint: disable=E0401
             from isaacsim.sensors.physics import ContactSensor  # pylint: disable=E0401
 
+            # Only remove a prim WE previously created at this path. Naively
+            # deleting any prim that happens to share the path would nuke
+            # whatever scene content lives there (a rigid body, a mesh, …).
             stage = omni.usd.get_context().get_stage()
-            if stage and stage.GetPrimAtPath(self._prim_path).IsValid():
-                stage.RemovePrim(self._prim_path)
+            if stage:
+                existing = stage.GetPrimAtPath(self._prim_path)
+                if existing.IsValid() and existing.GetTypeName() == "ContactSensor":
+                    stage.RemovePrim(self._prim_path)
 
             self._sensor = ContactSensor(
                 prim_path=self._prim_path,

@@ -55,6 +55,11 @@ class MujocoActuatorCtrl:
         """
         if not self._ready:
             return 0
+        if not isinstance(actuator_values, dict):
+            logger.warning(
+                f"actuator_values must be a dict, got {type(actuator_values).__name__}"
+            )
+            return 0
         applied = 0
         for name, value in actuator_values.items():
             ctrl_id = self._name_to_id.get(name)

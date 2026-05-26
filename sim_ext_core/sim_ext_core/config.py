@@ -165,7 +165,13 @@ def _read_jsonc(path: Path) -> dict[str, Any]:
     try:
         import pyjson5  # pylint: disable=E0401
 
-        return pyjson5.loads(text)
+        try:
+            return pyjson5.loads(text)
+        except pyjson5.Json5DecoderException as exc:
+            # Re-raise as json.JSONDecodeError so BridgeConfig.from_file's
+            # fallback path (which catches that type) fires uniformly across
+            # parser backends.
+            raise json.JSONDecodeError(str(exc), text, 0) from exc
     except ImportError:
         pass
     # Fallback: strip // full-line comments and parse as standard JSON.

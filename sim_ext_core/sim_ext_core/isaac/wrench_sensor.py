@@ -18,6 +18,9 @@ class IsaacWrenchSensor:
 
     def __init__(self, prim_path: str, joint_index: int = -1) -> None:
         self._prim_path = prim_path
+        # Preserve the input sentinel (-1 = "last joint") across teardown/setup
+        # cycles so a re-setup with a different DOF count re-resolves cleanly.
+        self._joint_index_cfg = joint_index
         self._joint_index = joint_index
         self._articulation = None
         self._ready: bool = False
@@ -33,18 +36,19 @@ class IsaacWrenchSensor:
             self._articulation.initialize()
 
             num_dof = self._articulation.num_dof
-            in_range = -num_dof <= self._joint_index <= num_dof - 1
+            cfg = self._joint_index_cfg
+            in_range = -num_dof <= cfg <= num_dof - 1
             if not in_range:
                 logger.error(
-                    f"IsaacWrenchSensor: joint_index={self._joint_index}"
+                    f"IsaacWrenchSensor: joint_index={cfg}"
                     f" out of range for '{self._prim_path}' ({num_dof} DOF)."
                 )
                 self._articulation = None
                 return False
 
-            # Normalise negative index once so get_wrench_data() never errors.
-            if self._joint_index < 0:
-                self._joint_index = num_dof + self._joint_index
+            # Resolve the (possibly-negative) config sentinel against the
+            # current DOF count; never mutate _joint_index_cfg itself.
+            self._joint_index = num_dof + cfg if cfg < 0 else cfg
 
             self._ready = True
         except Exception as exc:

@@ -44,6 +44,16 @@ class IsaacActuatorCtrl:
                 logger.warning(
                     f"IsaacActuatorCtrl: joints not found on '{self._prim_path}': {missing}"
                 )
+            # If joint_names was configured but NOTHING resolved, the bridge
+            # would otherwise mark itself ready and silently drop every
+            # command. Fail loud so misconfiguration surfaces at startup.
+            if self._joint_names and not self._name_to_idx:
+                logger.error(
+                    f"IsaacActuatorCtrl: zero joints resolved on '{self._prim_path}'"
+                    f" against dof_names={dof_names[:10]}{'…' if len(dof_names) > 10 else ''}"
+                )
+                self._view = None
+                return False
             self._ready = True
         except Exception as exc:
             logger.error(
@@ -64,9 +74,15 @@ class IsaacActuatorCtrl:
 
     def write_targets(self, actuator_values: dict) -> int:
         """Write each {name: value} pair into the articulation's joint
-        position targets. Unknown names are dropped with a warning.
+        position targets. Unknown names + non-numeric values are dropped
+        per-item — a single bad entry must not poison the whole batch.
         """
         if not self._ready or self._view is None:
+            return 0
+        if not isinstance(actuator_values, dict):
+            logger.warning(
+                f"actuator_values must be a dict, got {type(actuator_values).__name__}"
+            )
             return 0
         try:
             import numpy as np  # pylint: disable=E0401
@@ -80,8 +96,16 @@ class IsaacActuatorCtrl:
                         f"unknown actuator '{name}' on '{self._prim_path}' — dropped"
                     )
                     continue
+                try:
+                    coerced = float(value)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        f"non-numeric actuator '{name}'={value!r} on "
+                        f"'{self._prim_path}' — dropped"
+                    )
+                    continue
                 indices.append(idx)
-                values.append(float(value))
+                values.append(coerced)
             if not indices:
                 return 0
             self._view.set_joint_position_targets(

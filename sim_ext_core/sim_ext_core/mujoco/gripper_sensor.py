@@ -56,6 +56,13 @@ class MujocoGripperSensor:
 
                 resolved.append((name, qpos_adr, ctrl_adr))
 
+            if self._finger_joints and not resolved:
+                logger.error(
+                    "MujocoGripperSensor: none of the configured finger joints "
+                    f"resolved against the MJCF model: {self._finger_joints}"
+                )
+                return False
+
             self._resolved = resolved
             self._ready = True
         except Exception as exc:
