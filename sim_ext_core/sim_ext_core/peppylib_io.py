@@ -87,8 +87,17 @@ class PeppylibIO:  # pylint: disable=R0902
 
         if self._thread is not None:
             self._thread.join(timeout=5.0)
-            if not self._thread.is_alive():
-                self._thread = None
+            if self._thread.is_alive():
+                # peppylib v0.10's MessengerHandle exposes no explicit close;
+                # teardown relies on Python GC dropping the last reference.
+                # If the I/O thread didn't observe the cancel within 5s, the
+                # daemon connection will linger until process exit — log it so
+                # the leak is observable rather than silent.
+                logger.warning(
+                    "peppylib I/O thread still alive after 5s shutdown timeout"
+                    " — daemon connection may linger until process exit"
+                )
+            self._thread = None
 
         self._handle = None
         self._ready.clear()
