@@ -167,6 +167,25 @@ class PeppylibIO:  # pylint: disable=R0902
             pass
         return latest
 
+    def get_all(
+        self, source_node: str, topic: str, *, source_tag: str = "v1"
+    ) -> list[bytes]:
+        # Drain every queued message in FIFO order. Use for topics where each
+        # message is a distinct event (e.g. per-arm joint commands on a shared
+        # topic) and dropping earlier ones is a bug. For idempotent state
+        # signals (latest pause/reset wins) use get_latest instead.
+        with self._queues_lock:
+            q = self._queues.get((source_node, source_tag, topic))
+        if q is None:
+            return []
+        out: list[bytes] = []
+        try:
+            while True:
+                out.append(q.get_nowait())
+        except queue.Empty:
+            pass
+        return out
+
     def _run_event_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
