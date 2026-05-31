@@ -81,14 +81,15 @@ class SimControlBridge(BridgePlugin):
     def _handle_request(self, svc: str, raw: bytes, io: Any) -> None:
         try:
             request = json.loads(raw)
-        except Exception as exc:
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
             logger.warning(f"sim_control: malformed JSON on {svc}: {exc}")
-            return
-        try:
-            response = self._dispatch(svc, request)
-        except Exception as exc:
-            logger.error(f"sim_control: unhandled error in {svc}: {exc}")
-            response = {"success": False, "message": str(exc)}
+            response = {"success": False, "message": f"malformed JSON: {exc}"}
+        else:
+            try:
+                response = self._dispatch(svc, request)
+            except Exception as exc:
+                logger.error(f"sim_control: unhandled error in {svc}: {exc}")
+                response = {"success": False, "message": str(exc)}
         io.emit(
             self._node_name,
             f"{_TOPIC_PREFIX}{svc}{_RES_SUFFIX}",
