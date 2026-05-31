@@ -17,10 +17,11 @@ class IsaacArticulation:
         self._prim_path = prim_path
         self._view = None
         self._num_dof: int = 0
+        self._ready: bool = False
 
     def setup(self) -> bool:
         """Initialise the Articulation against the live USD stage."""
-        if self._view is not None:
+        if self._ready:
             return True
         try:
             from isaacsim.core.prims import Articulation  # pylint: disable=E0401
@@ -31,11 +32,13 @@ class IsaacArticulation:
             )
             self._view.initialize()
             self._num_dof = self._view.num_dof
+            self._ready = True
         except Exception as exc:
             logger.error(
                 f"Failed to initialise Articulation at '{self._prim_path}': {exc}"
             )
             self._view = None
+            self._ready = False
             return False
 
         logger.info(
@@ -47,6 +50,7 @@ class IsaacArticulation:
         """Release the Articulation view and reset DOF count."""
         self._view = None
         self._num_dof = 0
+        self._ready = False
 
     def get_dof_names(self) -> list[str]:
         """Return DOF names in the order Isaac Sim uses them."""
@@ -100,4 +104,4 @@ class IsaacArticulation:
     @property
     def is_ready(self) -> bool:
         """True when the articulation has been initialised."""
-        return self._view is not None
+        return self._ready

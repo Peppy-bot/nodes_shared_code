@@ -35,6 +35,10 @@ class MujocoSimControl:
             import mujoco  # pylint: disable=E0401
 
             mujoco.mj_resetData(self._model, self._data)
+            # Recompute derived fields (xpos / xquat / cvel) so a consumer
+            # reading joint_states or ee_pose between reset() and the next
+            # mj_step doesn't see stale pre-reset values.
+            mujoco.mj_forward(self._model, self._data)
             logger.info("MuJoCo: simulation reset.")
             return {"success": True, "message": "Simulation reset"}
         except Exception as exc:
