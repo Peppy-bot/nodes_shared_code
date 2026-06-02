@@ -52,11 +52,17 @@ pub struct ArmModel {
     pub base_from_world: Isometry3<f64>,
 }
 
+/// Tolerance (meters) for the SRS coincidence checks in [`ArmModel::from_fk`]:
+/// the largest deviation accepted as "exactly" concurrent / intersecting before
+/// a chain is rejected as non-SRS. An exactly-SRS chain sits at float roundoff
+/// (~1e-12 m); a malformed URDF deviates far more.
+const SRS_TOL_M: f64 = 1e-6;
+
 impl ArmModel {
     /// Derive the model from a loaded FK chain. Returns `Err` if the arm is not
-    /// a clean SRS chain (shoulder/wrist axes not concurrent, or the elbow axis
-    /// parallel to the shoulder-wrist line), so a non-SRS URDF fails loudly
-    /// rather than panicking or yielding NaNs.
+    /// a clean SRS chain (shoulder/wrist axes not concurrent within [`SRS_TOL_M`],
+    /// or the elbow axis not intersecting the shoulder-wrist line), so a non-SRS
+    /// URDF fails loudly rather than panicking or yielding NaNs.
     pub fn from_fk(fk: &mut ForwardKinematics) -> Result<Self, String> {
         let fk = fk.at(&[0.0; ARM_DOF]); // pose at home; read everything off this view
         let home_ee = fk.ee_pose();
@@ -85,7 +91,7 @@ impl ArmModel {
         // Enforce it here so a URDF whose tip sits off the wrist concurrency point
         // fails loudly rather than silently solving for the wrong wrist center.
         let ee_offset = (home_ee.translation.vector - wrist_home).norm();
-        if ee_offset > 1e-6 {
+        if ee_offset > SRS_TOL_M {
             return Err(format!(
                 "EE origin is {ee_offset:.4} m off the wrist center; the closed-form \
                  IK requires the tip link to sit at the j5-j7 concurrency point"
@@ -96,6 +102,17 @@ impl ArmModel {
         let elbow_home =
             closest_point_on_line((points[3], axes[3]), (shoulder, wrist_home - shoulder))
                 .ok_or("elbow axis (j4) is parallel to the shoulder-wrist line")?;
+
+        // j4's axis must actually *intersect* the S-W line (SRS), not merely
+        // pass near it: closest_point_on_line yields a point even for skew lines.
+        let sw_dir = (wrist_home - shoulder).normalize();
+        let elbow_skew = (elbow_home - shoulder).cross(&sw_dir).norm();
+        if elbow_skew > SRS_TOL_M {
+            return Err(format!(
+                "elbow axis (j4) misses the shoulder-wrist line by {elbow_skew:.4} m: \
+                 not an SRS arm"
+            ));
+        }
 
         Ok(Self {
             axes,
@@ -134,8 +151,10 @@ impl ArmModel {
 /// Least-squares concurrency point of a set of lines `(direction, point)`:
 /// the point `p` minimizing the sum of squared perpendicular distances to
 /// every line. Each line contributes the projector `I - ωωᵀ`; solving
-/// `(Σ Pᵢ) p = Σ Pᵢ qᵢ` gives `p`. For exactly-concurrent axes the residual
-/// is zero (the SRS structure this arm has).
+/// `(Σ Pᵢ) p = Σ Pᵢ qᵢ` gives `p`. Returns `None` unless the lines are
+/// genuinely concurrent: exactly-concurrent axes give a zero residual, but the
+/// least-squares fit also exists for a merely *near*-concurrent (skew) triple,
+/// so the per-line residual is checked against [`SRS_TOL_M`] before accepting.
 fn concurrency(lines: &[(Vector3<f64>, Vector3<f64>)]) -> Option<Vector3<f64>> {
     let mut a = Matrix3::zeros();
     let mut b = Vector3::zeros();
@@ -146,8 +165,18 @@ fn concurrency(lines: &[(Vector3<f64>, Vector3<f64>)]) -> Option<Vector3<f64>> {
         b += proj * pt;
     }
     // `a` is singular only when all lines are parallel (no unique perpendicular
-    // foot), which a clean SRS shoulder/wrist never is.
-    a.try_inverse().map(|inv| inv * b)
+    // foot). Otherwise a fit point exists; verify every axis actually passes
+    // through it, else the triple is skew (near-concurrent), not SRS.
+    let p = a.try_inverse().map(|inv| inv * b)?;
+    let max_residual = lines
+        .iter()
+        .map(|(dir, pt)| {
+            let w = dir.normalize();
+            let d = p - pt;
+            (d - w * d.dot(&w)).norm() // perpendicular distance from p to the line
+        })
+        .fold(0.0_f64, f64::max);
+    (max_residual <= SRS_TOL_M).then_some(p)
 }
 
 /// Point on line A `(a0 + s·da)` closest to line B `(b0 + t·db)`. Standard
@@ -274,6 +303,29 @@ mod tests {
                 (Vector3::z(), Vector3::new(1.0, 0.0, 0.0)),
                 (Vector3::z(), Vector3::new(0.0, 1.0, 0.0)),
                 (Vector3::z(), Vector3::new(2.0, 3.0, 0.0)),
+            ])
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn concurrency_accepts_exactly_concurrent() {
+        // Three axes through a common point return that point.
+        let c = Vector3::new(0.2, -0.3, 0.5);
+        let p = concurrency(&[(Vector3::x(), c), (Vector3::y(), c), (Vector3::z(), c)]).unwrap();
+        assert!((p - c).norm() < 1e-9, "got {p:?}");
+    }
+
+    #[test]
+    fn concurrency_rejects_near_concurrent_skew() {
+        // Axes that do NOT share a point: the least-squares fit exists (not
+        // all-parallel) but its residual exceeds SRS_TOL_M, so it is rejected
+        // rather than accepted as a spurious shoulder/wrist center.
+        assert!(
+            concurrency(&[
+                (Vector3::x(), Vector3::zeros()),
+                (Vector3::y(), Vector3::zeros()),
+                (Vector3::z(), Vector3::new(0.1, 0.0, 0.0)), // 0.1 m off the origin
             ])
             .is_none()
         );

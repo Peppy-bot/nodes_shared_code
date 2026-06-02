@@ -24,4 +24,4 @@ single-DoF node in this repo).
   - Kept `openarm_{left,right}_hand_tcp` fixed frames for future IK work.
 
 A new revision drops in by adding its URDF here and a `Version` variant in
-`src/lib.rs`.
+`src/description.rs`.

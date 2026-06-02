@@ -51,7 +51,7 @@ pub enum ArmSide {
 impl ArmSide {
     /// Parse the `"left"`/`"right"` node parameter.
     pub fn from_param(s: &str) -> Result<Self, String> {
-        match s {
+        match s.trim().to_ascii_lowercase().as_str() {
             "left" => Ok(ArmSide::Left),
             "right" => Ok(ArmSide::Right),
             other => Err(format!("arm_side must be 'left' or 'right', got '{other}'")),

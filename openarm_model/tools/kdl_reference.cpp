@@ -33,14 +33,18 @@
 #include <kdl/tree.hpp>
 
 #include <array>
+#include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace {
 
 constexpr unsigned int DOF = 7;
+const double HALF_PI = std::acos(-1.0) / 2.0; // portable pi/2 (M_PI is non-standard)
 using Vec7 = std::array<double, DOF>;
 
 KDL::JntArray to_jnt(const Vec7& v) {
@@ -70,7 +74,6 @@ int main(int argc, char** argv) {
         std::cerr << "failed to parse URDF: " << urdf << "\n";
         return 1;
     }
-    const double HALF_PI = M_PI / 2.0;
 
     // Postures must stay in sync with the gravity.rs / coriolis.rs tests.
     const std::vector<std::pair<std::string, Vec7>> gravity_cases = {

@@ -204,10 +204,25 @@ impl Posed<'_> {
 /// Collect the [`ARM_DOF`] revolute joint nodes of `side` in chain order,
 /// rejecting any chain that does not reduce to exactly that. The fixed
 /// world/body mounting joints are skipped.
+///
+/// A clean 7-DOF SRS arm's *only* degrees of freedom are its seven revolute
+/// joints. Any other movable joint (e.g. a prismatic DOF, or an actuated joint
+/// upstream of the mount) is rejected: it would otherwise pass the revolute
+/// count below while `base_from_world` is frozen at home, silently building the
+/// wrong model instead of returning `Err`.
 fn collect_revolute_nodes(
     chain: &SerialChain<f64>,
     tip_link: &str,
 ) -> Result<[Node<f64>; ARM_DOF], String> {
+    if let Some(extra) = chain
+        .iter()
+        .find(|n| !matches!(n.joint().joint_type, JointType::Fixed | JointType::Rotational { .. }))
+    {
+        return Err(format!(
+            "chain to {tip_link} has a non-revolute movable joint '{}': not a 7-DOF revolute SRS arm",
+            extra.joint().name
+        ));
+    }
     let nodes: Vec<Node<f64>> = chain
         .iter()
         .filter(|n| matches!(n.joint().joint_type, JointType::Rotational { .. }))
@@ -264,5 +279,25 @@ mod tests {
     #[test]
     fn rejects_malformed_urdf() {
         assert!(ForwardKinematics::from_urdf("not even xml", "a", "b").is_err());
+    }
+
+    #[test]
+    fn rejects_non_revolute_movable_joint() {
+        // A prismatic DOF on the path must Err: the model freezes the base
+        // transform at home and applies only revolute angles, so a sliding joint
+        // would silently build the wrong model.
+        let urdf = r#"<?xml version="1.0"?><robot name="x">
+          <link name="base"/><link name="tip"/>
+          <joint name="slide" type="prismatic">
+            <parent link="base"/><child link="tip"/>
+            <axis xyz="0 0 1"/><origin xyz="0 0 0"/>
+            <limit lower="0" upper="1" effort="1" velocity="1"/>
+          </joint>
+        </robot>"#;
+        let err = match ForwardKinematics::from_urdf(urdf, "base", "tip") {
+            Ok(_) => panic!("expected Err for a prismatic joint"),
+            Err(e) => e,
+        };
+        assert!(err.contains("non-revolute"), "unexpected error: {err}");
     }
 }

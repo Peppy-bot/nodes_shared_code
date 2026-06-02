@@ -98,7 +98,7 @@ def gen_frames():
         ax.text(*poly[0], "  arm base", fontsize=8)
         ax.text(*poly[3], "  EE", fontsize=8)
         # world RGB triad at the origin
-        for vec, col in zip(np.eye(3) * 0.18, ["r", "g", "b"]):
+        for vec, col in zip(np.eye(3) * 0.18, ["r", "g", "b"], strict=True):
             ax.quiver(0, 0, 0, *vec, color=col, lw=1.5, arrow_length_ratio=0.18)
         ax.text(0, 0, -0.04, "world origin", fontsize=8, ha="center")
         # purple revolute joint axes at each joint origin
@@ -179,15 +179,21 @@ def gen_arm_angle():
     ax.plot(*np.array([e_psi, Wp]).T, color="#2ca02c", lw=2)
     refp = center + radius * a_hat
     ax.plot(*np.array([center, refp]).T, color=GOLD, lw=1.5)
-    ax.scatter(*Sp, color="k", s=20); ax.text(*Sp, "  S (shoulder)", fontsize=8)
-    ax.scatter(*Wp, color="k", s=20); ax.text(*Wp, "  W (wrist center)", fontsize=8)
+    ax.scatter(*Sp, color="k", s=20)
+    ax.text(*Sp, "  S (shoulder)", fontsize=8)
+    ax.scatter(*Wp, color="k", s=20)
+    ax.text(*Wp, "  W (wrist center)", fontsize=8)
     ax.scatter(*e_psi, color=RED, s=25)
     ax.text(*e_psi, "  E (elbow)", fontsize=8, color=RED)
     ax.text(*refp, " ψ=0 ref", fontsize=7, color=GOLD)
     ax.set_title("3D: the elbow rides a circle about the (vertical) S-W line", fontsize=9)
-    ax.set_xlim(-0.22, 0.22); ax.set_ylim(-0.22, 0.22); ax.set_zlim(-0.22, 0.22)
+    ax.set_xlim(-0.22, 0.22)
+    ax.set_ylim(-0.22, 0.22)
+    ax.set_zlim(-0.22, 0.22)
     ax.set_box_aspect((1, 1, 1))
-    ax.set_xticklabels([]); ax.set_yticklabels([]); ax.set_zticklabels([])
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.set_zticklabels([])
 
     # Panel 2: 2D S-E-W triangle (the reach fixes theta4).
     ax = fig.add_subplot(1, 3, 2)
@@ -196,10 +202,10 @@ def gen_arm_angle():
     ax.plot(*np.array([Sp2, Ep2]).T, color="#1f77b4", lw=2.5)
     ax.plot(*np.array([Ep2, Wp2]).T, color="#2ca02c", lw=2.5)
     ax.plot(*np.array([Sp2, Wp2]).T, color="k", ls="--", lw=1)
-    ax.scatter(*Sp2, color="k", s=25); ax.text(Sp2[0] - 0.05, Sp2[1], "S (shoulder) ",
-                                               ha="right", fontsize=9)
-    ax.scatter(*Wp2, color="k", s=25); ax.text(Wp2[0] - 0.05, Wp2[1], "W (wrist center) ",
-                                               ha="right", fontsize=9)
+    ax.scatter(*Sp2, color="k", s=25)
+    ax.text(Sp2[0] - 0.05, Sp2[1], "S (shoulder) ", ha="right", fontsize=9)
+    ax.scatter(*Wp2, color="k", s=25)
+    ax.text(Wp2[0] - 0.05, Wp2[1], "W (wrist center) ", ha="right", fontsize=9)
     ax.scatter(*Ep2, color="#e74c3c", s=25)
     ax.text(Ep2[0] + 0.04, Ep2[1], "E (elbow)", fontsize=9, color="#e74c3c")
     ax.text(*(0.5 * Sp2 + 0.5 * Ep2 + np.array([0.03, 0.03])), "upper arm 0.220",
@@ -209,7 +215,9 @@ def gen_arm_angle():
     ax.annotate("θ4", Ep2 + np.array([-0.16, -0.03]), fontsize=10)
     ax.set_title("2D side view: the S-E-W triangle,\nθ4 (elbow flex) is fixed by the "
                  "reach |SW|", fontsize=9)
-    ax.set_xlim(-0.55, 0.95); ax.set_ylim(-0.2, 1.2); ax.axis("off")
+    ax.set_xlim(-0.55, 0.95)
+    ax.set_ylim(-0.2, 1.2)
+    ax.axis("off")
 
     # Panel 3: 2D view along the S-W line (down the circle's normal).
     ax = fig.add_subplot(1, 3, 3)
@@ -229,7 +237,9 @@ def gen_arm_angle():
     ax.text(0.46 * np.cos(psi / 2), 0.46 * np.sin(psi / 2), "ψ", fontsize=14)
     ax.set_title("2D view along S-W: the elbow circle,\nψ (arm angle) is the one free "
                  "parameter", fontsize=9)
-    ax.set_xlim(-1.5, 3.0); ax.set_ylim(-1.4, 1.4); ax.axis("off")
+    ax.set_xlim(-1.5, 3.0)
+    ax.set_ylim(-1.4, 1.4)
+    ax.axis("off")
 
     fig.tight_layout(rect=(0, 0, 1, 0.9))
     fig.savefig("arm_angle.png", dpi=130)

@@ -56,7 +56,7 @@ uses) it extends along **+Y**; in the world frame that direction is −Z (down).
 The three SRS centers (in the arm base frame, derived from the joint axes and
 verified against the URDF) are:
 
-```
+```text
 S  (shoulder)  = (0,      0,      0.1225)   joints 1,2,3 concurrent here
 E* (elbow)     = (0,      0.220,  0.1225)   on the S-W line
 W  (wrist)     = (0,      0.436,  0.1225)   joints 5,6,7 concurrent here
@@ -65,7 +65,7 @@ upper arm |S-E*| = 0.220 m     forearm |E*-W| = 0.216 m
 
 Revolute axes at `q = 0`, in the arm base frame (purple arrows in the figure):
 
-```
+```text
 j1 +Z   j2 −X   j3 +Y      (shoulder: a 3-axis spherical joint at S)
 j4 −Z                      (elbow flex)
 j5 +Y   j6 +X   j7 +Z      (wrist: a 3-axis spherical joint at W)
@@ -275,7 +275,7 @@ values to < 1e-3 N·m.
   and the geometry helpers;
 - gravity/Coriolis vs KDL reference values.
 
-```
+```bash
 cargo test            # all of the above
 cargo test round_trip # just the IK↔FK round-trip
 ```

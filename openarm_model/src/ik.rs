@@ -391,8 +391,13 @@ fn seed_arm_angle(model: &ArmModel, seed: &JointVec) -> Option<f64> {
 /// The 10° step bounds the redundancy resolution: a feasible window narrower
 /// than one step can fall between grid points and be missed, and `FromSeed` may
 /// land up to one step from the seed's angle even when a closer feasible angle
-/// exists. Adequate for this arm's wide, continuous limits; raise `steps` for a
-/// finer resolution if a future use needs it.
+/// exists. This is a heuristic, NOT a completeness guarantee: with a seed whose
+/// arm angle is unusable, ~0.3% of reachable targets get no solution at this
+/// grid resolution (measured, V1 limits; see `tests/psi_grid_resolution.rs`).
+/// In servoing the seed is the previous solution so the base angle already
+/// tracks the feasible window and the grid is rarely the deciding factor; the
+/// miss rate is the cold-start / large-jump case. A continuous or adaptive
+/// search would remove it (tracked follow-up); raise `steps` to narrow it.
 fn psi_sweep(preferred: Option<f64>) -> Vec<f64> {
     let base = preferred.unwrap_or(0.0);
     let steps = 18;
