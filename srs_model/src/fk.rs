@@ -16,13 +16,13 @@ use k::nalgebra::{Isometry3, Matrix3, Point3, Vector3};
 use k::{Chain, JointType, Node, SerialChain};
 
 use crate::payload::Payload;
-use crate::{ARM_DOF, JointVec};
+use crate::{ARM_DOF, JointVec, Limit};
 
 /// Parsed serial chain (base -> joint7) plus the constant `world -> base`
 /// transform and per-segment immutable data (axis, mass, COM, inertia)
 /// captured at load. Segment `i` is the link moved by joint `i`; its inertia
 /// is in the link frame (V1.0 URDF inertials use identity rpy).
-pub struct ForwardKinematics {
+pub(crate) struct ForwardKinematics {
     chain: SerialChain<f64>,
     /// The 7 revolute joint nodes in chain order.
     joint_nodes: [Node<f64>; ARM_DOF],
@@ -48,6 +48,25 @@ impl ForwardKinematics {
     pub fn from_urdf(urdf: &str, base_link: &str) -> Result<Self, String> {
         let robot = urdf_rs::read_from_string(urdf).map_err(|e| format!("parse URDF: {e}"))?;
         Self::from_chain(Chain::<f64>::from(robot), base_link)
+    }
+
+    /// Like [`from_urdf`](Self::from_urdf) but reads the URDF from a file path,
+    /// folding the IO error into the same `Result` so callers need not handle the
+    /// read separately.
+    pub fn from_urdf_file(path: &str, base_link: &str) -> Result<Self, String> {
+        let urdf = std::fs::read_to_string(path).map_err(|e| format!("read urdf '{path}': {e}"))?;
+        Self::from_urdf(&urdf, base_link)
+    }
+
+    /// URDF joint position limits, j1..j7, in radians. Falls back to `±π` for any
+    /// joint the URDF leaves unlimited (none do for the OpenArm V1.0). Read off the
+    /// parsed chain, so a consumer that only needs FK + limits (e.g. a controller
+    /// computing gravity/Coriolis) never has to build an [`ArmModel`](crate::model::ArmModel).
+    pub fn limits(&self) -> [Limit; ARM_DOF] {
+        std::array::from_fn(|i| match &self.joint_nodes[i].joint().limits {
+            Some(range) => Limit { lo: range.min, hi: range.max },
+            None => Limit { lo: -std::f64::consts::PI, hi: std::f64::consts::PI },
+        })
     }
 
     fn from_chain(full: Chain<f64>, base_link: &str) -> Result<Self, String> {
@@ -145,9 +164,9 @@ impl ForwardKinematics {
     }
 }
 
-/// A [`ForwardKinematics`] posed at one configuration: an immutable, read-only
-/// view obtained from [`ForwardKinematics::at`]. Every pose-dependent quantity is
-/// read through here, so it can only be queried after a pose has been applied.
+/// The arm posed at one configuration: an immutable, read-only view obtained from
+/// [`Arm::at`](crate::Arm::at). Every pose-dependent quantity (EE pose, gravity,
+/// Coriolis) is read through here, so it can only be queried after a pose.
 pub struct Posed<'a> {
     fk: &'a ForwardKinematics,
 }
@@ -156,6 +175,17 @@ impl Posed<'_> {
     /// End-effector (tip-link) pose in the arm base frame.
     pub fn ee_pose(&self) -> Isometry3<f64> {
         self.to_base(&self.fk.tip)
+    }
+
+    /// Gravity-compensation torques at this posture: the torque each joint must
+    /// apply to hold the arm against gravity (distal payload included).
+    pub fn gravity_torques(&self) -> JointVec {
+        crate::gravity::torques(self)
+    }
+
+    /// Coriolis + centripetal torques at joint velocity `qdot` for this posture.
+    pub fn coriolis_torques(&self, qdot: &JointVec) -> JointVec {
+        crate::coriolis::torques(self, qdot)
     }
 
     /// World-frame revolute axis of joint `i`, re-expressed in the base frame. A
@@ -177,15 +207,6 @@ impl Posed<'_> {
     /// the body). Converts world/body-frame targets into the arm base frame.
     pub(crate) fn base_from_world(&self) -> Isometry3<f64> {
         self.fk.base_from_world
-    }
-
-    /// URDF position limit `(lower, upper)` of joint `i`, in radians. Falls back
-    /// to `±π` if the URDF leaves a joint unlimited (none do for V1.0).
-    pub(crate) fn joint_limit(&self, i: usize) -> (f64, f64) {
-        match &self.fk.joint_nodes[i].joint().limits {
-            Some(range) => (range.min, range.max),
-            None => (-std::f64::consts::PI, std::f64::consts::PI),
-        }
     }
 
     // --- World-frame accessors (gravity is world -z; used by `gravity` / `coriolis`). ---
