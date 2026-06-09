@@ -142,7 +142,7 @@ def _resolve_port(daemon_state: dict[str, Any]) -> int:
 
 def _read_daemon_state() -> dict[str, Any]:
     try:
-        return json.loads(_DAEMON_STATE_PATH.read_text())
+        return _read_jsonc(_DAEMON_STATE_PATH)
     except FileNotFoundError:
         logger.warning(
             f"daemon_state.json not found at {_DAEMON_STATE_PATH}"
