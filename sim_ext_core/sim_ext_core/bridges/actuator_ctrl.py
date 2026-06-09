@@ -32,7 +32,7 @@ class ActuatorCtrlBridge(BridgePlugin):
             return
         try:
             msg = json.loads(raw)
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        except (json.JSONDecodeError, TypeError) as exc:
             logger.warning(f"set_ctrl: malformed JSON on {self._topic}: {exc}")
             return
         values = msg.get("actuator_values") if isinstance(msg, dict) else None
