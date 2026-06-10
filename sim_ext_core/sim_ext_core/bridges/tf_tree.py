@@ -1,3 +1,5 @@
+"""Transform tree publisher bridge."""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +12,8 @@ _QOS = "sensor_data"
 
 
 class TfTreeBridge(BridgePlugin):
+    """Publishes the world transform tree."""
+
 
     def __init__(self, sensor: Any, config: Any, entry: Any) -> None:
         self._sensor = sensor

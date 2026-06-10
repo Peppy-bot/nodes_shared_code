@@ -1,3 +1,5 @@
+"""Sim clock publisher bridge."""
+
 from __future__ import annotations
 
 import json
@@ -11,6 +13,8 @@ _DEFAULT_TOPIC = "clock"
 
 
 class ClockBridge(BridgePlugin):
+    """Publishes the sim clock each step."""
+
 
     def __init__(self, sensor: Any, config: Any, entry: Any) -> None:
         if entry is None:

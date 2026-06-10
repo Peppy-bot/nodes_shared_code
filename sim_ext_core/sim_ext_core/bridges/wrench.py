@@ -1,3 +1,5 @@
+"""Wrench publisher bridge."""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +12,8 @@ _QOS = "sensor_data"
 
 
 class WrenchBridge(BridgePlugin):
+    """Publishes force/torque wrench readings."""
+
 
     def __init__(self, sensor: Any, config: Any, entry: Any) -> None:
         self._sensor = sensor

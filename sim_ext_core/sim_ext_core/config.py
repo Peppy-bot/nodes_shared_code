@@ -1,3 +1,5 @@
+"""Bridge configuration parsed from sim_bridge.json5, env vars, and daemon state."""
+
 from __future__ import annotations
 
 import json
@@ -43,6 +45,8 @@ class SubscriberEntry:
 
 @dataclass(frozen=True)
 class BridgeConfig:
+    """Parsed bridge configuration: node identity, transport endpoint, and the publisher/subscriber registry."""
+
     node_name: str
     host: str
     port: int

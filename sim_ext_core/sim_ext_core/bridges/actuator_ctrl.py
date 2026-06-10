@@ -1,3 +1,5 @@
+"""Actuator command bridge — applies set_ctrl payloads to the sim."""
+
 from __future__ import annotations
 
 import json
@@ -12,6 +14,8 @@ _QOS = "standard"
 
 
 class ActuatorCtrlBridge(BridgePlugin):
+    """Subscribes set_ctrl_* payloads and writes actuator targets into the sim."""
+
     def __init__(self, actuator_ctrl: Any, _config: Any, entry: Any) -> None:
         self._actuator_ctrl = actuator_ctrl
         self._source_node: str = entry.source_node

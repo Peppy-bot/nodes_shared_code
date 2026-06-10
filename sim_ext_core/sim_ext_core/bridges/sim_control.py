@@ -1,3 +1,5 @@
+"""Sim control bridge — pause, resume, and step the sim over raw topics."""
+
 from __future__ import annotations
 
 import json
@@ -22,6 +24,8 @@ _QOS = "standard"
 
 
 class SimControlInterface(ABC):
+    """Engine hooks the sim launcher provides for pause/resume/step."""
+
 
     @abstractmethod
     def reset(self) -> dict: ...
@@ -37,6 +41,8 @@ class SimControlInterface(ABC):
 
 
 class SimControlBridge(BridgePlugin):
+    """Applies pause/resume/step_sim requests against the SimControlInterface."""
+
 
     def __init__(
         self,

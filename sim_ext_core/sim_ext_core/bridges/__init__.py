@@ -1,3 +1,5 @@
+"""Concrete bridge plugins, re-exported for bridge_extension wiring."""
+
 from .actuator_ctrl import ActuatorCtrlBridge
 from .clock import ClockBridge
 from .contact_forces import ContactForcesBridge

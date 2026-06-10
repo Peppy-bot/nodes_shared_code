@@ -1,3 +1,5 @@
+"""Threaded peppylib transport shared by all bridge plugins."""
+
 from __future__ import annotations
 
 import asyncio
@@ -43,6 +45,8 @@ def peppylib_session(config: _IOConfig) -> Iterator[PeppylibIO]:
 
 
 class PeppylibIO:  # pylint: disable=R0902
+    """Owns the peppylib messenger connection; publishes bridge payloads and
+    drains subscriber queues on a background thread."""
 
     def __init__(self, config: _IOConfig) -> None:
         self._config = config

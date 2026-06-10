@@ -1,3 +1,5 @@
+"""Contact force publisher bridge."""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +12,8 @@ _QOS = "sensor_data"
 
 
 class ContactForcesBridge(BridgePlugin):
+    """Publishes active contacts read from a contact sensor."""
+
 
     def __init__(self, sensor: Any, config: Any, entry: Any) -> None:
         self._sensor = sensor
