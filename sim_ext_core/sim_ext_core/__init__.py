@@ -1,8 +1,9 @@
-"""Public surface of sim_ext_core: bridge plugins, config, and peppylib transport."""
+"""Public surface of sim_ext_core: bridge plugins and config. Transport is
+duck-typed — the consuming node supplies an IO object with emit/get_latest
+(peppylib-backed in peppy nodes); this library never imports peppylib."""
 
 from .base import BridgePlugin
 from .config import BridgeConfig, PublisherEntry, SubscriberEntry
-from .peppylib_io import PeppylibIO, peppylib_session
 from .bridges import (
     ActuatorCtrlBridge,
     ClockBridge,
@@ -29,12 +30,10 @@ __all__ = [
     "ImuBridge",
     "JointStatesBridge",
     "OdometryBridge",
-    "PeppylibIO",
     "PublisherEntry",
     "SimControlBridge",
     "SimControlInterface",
     "SubscriberEntry",
     "TfTreeBridge",
     "WrenchBridge",
-    "peppylib_session",
 ]

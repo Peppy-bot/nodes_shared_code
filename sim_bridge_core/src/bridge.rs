@@ -3,11 +3,11 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use peppylib::runtime::CancellationToken;
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 
-use crate::config::DaemonState;
 use crate::pipeline::{run_os_to_sim, run_sim_to_os, BoxFuture};
+use crate::transport::RawTransport;
 
 type Pipeline = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 
@@ -37,22 +37,22 @@ impl ArmMergeState {
     }
 }
 
-pub struct SimBridge<Runner> {
+pub struct SimBridge<Runner, T: RawTransport> {
     runner: Arc<Runner>,
-    daemon: DaemonState,
+    transport: Arc<T>,
     token: CancellationToken,
     sim_node: Arc<str>,
     pipelines: Vec<Pipeline>,
 }
 
-impl<Runner: Send + Sync + 'static> SimBridge<Runner> {
+impl<Runner: Send + Sync + 'static, T: RawTransport> SimBridge<Runner, T> {
     pub fn new(
         runner: Arc<Runner>,
-        daemon: DaemonState,
+        transport: Arc<T>,
         token: CancellationToken,
         sim_node: Arc<str>,
     ) -> Self {
-        Self { runner, daemon, token, sim_node, pipelines: Vec::new() }
+        Self { runner, transport, token, sim_node, pipelines: Vec::new() }
     }
 
     pub fn sim_to_os<Msg, EmitFn>(mut self, topic: Arc<str>, emit_fn: EmitFn) -> Self
@@ -61,9 +61,9 @@ impl<Runner: Send + Sync + 'static> SimBridge<Runner> {
         EmitFn: Fn(Arc<Runner>, Msg) -> BoxFuture<std::result::Result<(), String>> + Send + 'static,
     {
         self.pipelines.push(Box::pin(run_sim_to_os(
+            self.transport.clone(),
             self.runner.clone(),
             self.token.clone(),
-            self.daemon.clone(),
             self.sim_node.clone(),
             topic,
             emit_fn,
@@ -77,9 +77,9 @@ impl<Runner: Send + Sync + 'static> SimBridge<Runner> {
         RecvFn: Fn(Arc<Runner>) -> BoxFuture<std::result::Result<(String, Msg), String>> + Send + 'static,
     {
         self.pipelines.push(Box::pin(run_os_to_sim(
+            self.transport.clone(),
             self.runner.clone(),
             self.token.clone(),
-            self.daemon.clone(),
             topic,
             recv_fn,
         )));

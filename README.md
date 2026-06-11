@@ -9,8 +9,8 @@ PeppyOS nodes live in separate repositories under the nodes hub. Shared code tha
 | Library | Language | Purpose |
 |---|---|---|
 | [openarm_can](./openarm_can) | Rust | Safe wrapper around the `openarm_can` C++ library for driving the physical OpenArm hardware over CAN (`ArmCan` / `GripperCan`, Damiao motor types, OpenArm v10 constants) |
-| [sim_bridge_core](./sim_bridge_core) | Rust | peppylib ↔ peppygen translation layer for Isaac Sim and MuJoCo sim bridge nodes |
-| [sim_ext_core](./sim_ext_core) | Python | Plugin lifecycle, peppylib transport, config loading, and sensor bridge plugins for the in-sim extensions |
+| [sim_bridge_core](./sim_bridge_core) | Rust | raw-to-peppygen pipelines for Isaac Sim and MuJoCo bridge nodes; the node supplies the peppylib transport |
+| [sim_ext_core](./sim_ext_core) | Python | Plugin lifecycle, config loading, and sensor bridge plugins for the in-sim extensions; the node supplies the IO transport |
 
 ## Using these libraries
 
