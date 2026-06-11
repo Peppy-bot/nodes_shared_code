@@ -45,7 +45,10 @@ class ActuatorCtrlBridge(BridgePlugin):
                 f"set_ctrl: payload missing actuator_values dict on {self._topic}"
             )
             return
-        self._actuator_ctrl.write_targets(values)
+        # Optional velocity setpoints (trajectory feedforward) — older
+        # publishers omit them and the engine wrapper defaults them to zero.
+        velocities = msg.get("velocity_values")
+        self._actuator_ctrl.write_targets(values, velocities)
 
     @property
     def is_ready(self) -> bool:
