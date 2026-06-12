@@ -1,8 +1,7 @@
 //! Integration tests: the OpenArm fixture model driven through two-arm
-//! scenarios. Distances assert against the classified pair set, so these
-//! also pin the checked-in fixture margins; regenerate with the documented
-//! fit_capsules/classify_pairs invocations after changing geometry and
-//! re-baseline deliberately if values move.
+//! scenarios. Distances assert against construction-derived capsules and
+//! margins, so a change to the fixture geometry or to the fit moves these
+//! numbers; re-baseline deliberately when that happens.
 
 use collision_model::{DualArmCollisionModel, MarginPolicy};
 use srs_model::JointVec;

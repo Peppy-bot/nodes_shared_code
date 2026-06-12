@@ -42,6 +42,16 @@ pub struct MarginPolicy {
 }
 
 impl MarginPolicy {
+    /// A governor band arithmetically consistent with this policy: stop at a
+    /// quarter of the headroom, full speed at three quarters, so reference
+    /// poses (which read exactly the headroom) sit above the band and never
+    /// throttle. Consistency is all it guarantees; whether the thresholds
+    /// are dynamically safe depends on closing speed and reaction latency,
+    /// which only the consumer knows.
+    pub fn consistent_band(&self) -> Result<crate::GovernorBand, String> {
+        crate::GovernorBand::new(self.headroom / 4.0, self.headroom * 0.75)
+    }
+
     fn validate(&self) -> Result<(), String> {
         if !(self.headroom.is_finite() && self.headroom > 0.0) {
             return Err(format!("margin policy headroom must be finite and positive, got {}", self.headroom));
@@ -214,6 +224,9 @@ impl DualArmCollisionModel {
         right_base: &str,
         pair_specs: &[PairSpec],
     ) -> Result<Self, String> {
+        if left_base == right_base {
+            return Err(format!("left and right base links are both '{left_base}'; a bimanual model needs two chains"));
+        }
         let mut left = Arm::from_urdf(urdf, left_base)?;
         let mut right = Arm::from_urdf(urdf, right_base)?;
 
@@ -496,6 +509,29 @@ mod tests {
         let home = [0.0, 0.0, 0.0, 0.05, 0.0, 0.0, 0.0];
         let p = m.min_distance(&home, &home).expect("query");
         assert!((p.distance - 0.04).abs() < 1e-3, "home floor {:+.4}", p.distance);
+    }
+
+    #[test]
+    fn model_is_send_for_task_ownership() {
+        fn assert_send<T: Send>() {}
+        assert_send::<DualArmCollisionModel>();
+    }
+
+    #[test]
+    fn rejects_identical_base_links() {
+        let e = DualArmCollisionModel::new(URDF, MESHES, "openarm_left_link0", "openarm_left_link0", &policy())
+            .err()
+            .expect("identical bases must fail");
+        assert!(e.contains("two chains"), "{e}");
+    }
+
+    #[test]
+    fn consistent_band_sits_inside_the_headroom() {
+        let band = policy().consistent_band().expect("valid band");
+        assert!(band.d_safe() < policy().headroom);
+        assert!(band.d_stop() < band.d_safe());
+        // Rest poses read the headroom and must pass at full speed.
+        assert_eq!(band.scale(policy().headroom, policy().headroom - 1e-6), 1.0);
     }
 
     #[test]

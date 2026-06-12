@@ -43,7 +43,7 @@ let allowed_fraction = band.scale(d_now, d_next);
 ## Capsules
 
 Every link is wrapped in one or more capsules (sphere-swept segments) fitted
-offline from the URDF's collision meshes. Capsule-capsule distance is closed
+at construction from the URDF's collision meshes. Capsule-capsule distance is closed
 form and branch-light; a full query over the fixture robot (99 checked
 pairs, ~390 capsule-capsule distances) measures ~23 us in release, and a
 release-mode test asserts the budget stays under 1 ms.
@@ -132,15 +132,83 @@ intentionally discontinuous at `d_next == d_now` inside the band; consumers
 tracking a tangential path should rate-limit the commanded step if chatter
 matters downstream.
 
-## Integration shape
+## What you supply, what is derived
 
-The consumer is whichever node sees both arms (for OpenArm, the backbone):
-it evaluates `min_distance` on every joint-state update as a watchdog,
-holds or aborts both arms below threshold, and vets commands at the routing
-point by rejecting goals that land in violation and scaling streamed
-setpoints with the governor. Everything robot-specific arrives as
-parameters and deployed description files: the URDF path, the collision
-mesh directory, and the two base-link names.
+| Supplied by the caller | Why it cannot be derived |
+|---|---|
+| URDF path | the robot description itself |
+| collision mesh directory | `package://` URIs are not filesystem paths; the meshes must be deployed next to the description |
+| left and right base links | which chain is "left" is robot identity, not geometry (the model's `q_left` follows it) |
+| `MarginPolicy` (optional, `Default`) | headroom is a safety-tuning knob coupled to the governor band; extra reference poses are application facts |
+| `GovernorBand` (or `policy.recommended_band()`) | stop/safe thresholds belong to the consumer's control loop |
+
+Everything else is derived at construction: capsules (fitted from the
+meshes), the body set (chains walked from the base links, attached children
+baked, remaining collision links must be world-fixed), the checked pairs
+(structural rules), and the margins (reference baselines). Construction
+fails loudly on anything it cannot account for; nothing is silently
+unchecked.
+
+## Calling from the backbone
+
+The consumer is whichever node sees both arms (for OpenArm, the backbone).
+The node vendors the description (URDF + collision meshes) in its own
+directory, since peppy snapshots only the node dir and does not follow
+symlinks, and exposes the paths and base links as parameters:
+
+```rust
+use collision_model::{DualArmCollisionModel, MarginPolicy};
+
+// Bringup, once (~0.25 s release; bimanual fit + pair derivation).
+let policy = MarginPolicy {
+    headroom: 0.04,
+    // Neutral is covered by default; add poses the arms actually park in.
+    references: vec![[0.0; 7], [0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0]],
+};
+let mut model = DualArmCollisionModel::from_urdf_file(
+    &params.urdf_path,         // same description the arm nodes load
+    &params.collision_meshes_dir,
+    &params.left_base_link,    // e.g. "openarm_left_link0"
+    &params.right_base_link,
+    &policy,
+)?;
+let band = policy.recommended_band()?; // d_stop, d_safe consistent with margins
+
+// Log the derived contract once; margined pairs are the structurally snug
+// ones whose alarm is baseline-relative.
+for (a, b, margin) in model.pair_margins() {
+    if margin < 0.0 {
+        info!("margined pair {a} / {b}: {margin:+.3}");
+    }
+}
+
+// Queries take &mut self (FK poses in place), so one task owns the model;
+// it is Send, so move it into that task.
+//
+// Watchdog, on every joint-state update from the two arms. This is the
+// backstop, not the throttle: the stream vetting below already stalls
+// commanded approach at d_stop, so the measured state reaches it only
+// through what commands do not control (tracking overshoot, drift, a
+// stale or bypassed stream). Keep it armed in teleop; in normal operation
+// it never fires. Make the response proportionate: hold position and
+// auto-release as the distance recovers (separating commands pass vetting
+// regardless), and reserve a motor abort for distance at or below zero.
+let p = model.min_distance(&q_left, &q_right)?;
+let d_now = p.distance; // p borrows the model; copy out what outlives it
+if d_now <= band.d_stop() {
+    // hold both arms; p names the pair, witness points are in the URDF
+    // root frame
+}
+
+// Stream vetting, per forwarded setpoint: the actual throttle. Approach
+// is scaled to a stop across the band; separating motion always passes.
+let d_next = model.min_distance(&q_left_cmd, &q_right_cmd)?.distance;
+let scale = band.scale(d_now, d_next);
+// forward q + scale * (q_cmd - q)
+```
+
+The interface work this needs on the arm side (a `joint_states` emitted
+topic) and the hold and abort wiring live with the backbone, not here.
 
 ## Visualization
 
