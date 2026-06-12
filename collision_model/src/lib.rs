@@ -1,0 +1,23 @@
+//! Runtime self-collision detection for a bimanual arm.
+//!
+//! Every link is conservatively wrapped in one or more capsules fitted offline
+//! from the URDF's collision meshes; at runtime the only geometry is capsule
+//! against capsule, closed-form and cheap enough for every control tick.
+//!
+//! - [`Capsule`] is the primitive; [`Capsule::distance_to`] the signed surface
+//!   distance (negative means penetration).
+//! - [`GovernorBand`] is the direction-aware proximity law that scales
+//!   commanded steps: separating motion always passes, approaching motion
+//!   ramps to a stop across the band.
+//!
+//! Pure Rust, no hardware or messaging deps, same discipline as `srs_model`.
+
+pub mod geometry;
+mod governor;
+
+pub use geometry::{Capsule, CapsuleDistance, point_segment_distance, segment_segment_closest};
+pub use governor::GovernorBand;
+
+/// Re-export the linear-algebra types so downstream crates use the same
+/// `nalgebra` version `srs_model` (and `k`) were built against.
+pub use srs_model::nalgebra;
