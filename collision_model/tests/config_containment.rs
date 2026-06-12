@@ -58,10 +58,10 @@ fn assert_contained(vertices: &[Point3<f64>], capsules: &[Capsule], what: &str) 
 fn fixed_bodies_contain_their_meshes() {
     let (urdf, config, meshes) = assets();
     assert_eq!(config.fixed.len(), 3, "body and two mount links");
-    for (name, capsules) in &config.fixed {
-        let vertices = urdf.fixed_vertices_in_root(name, &meshes).expect("fixed vertices");
+    for b in &config.fixed {
+        let vertices = urdf.fixed_vertices_in_root(&b.name, &meshes).expect("fixed vertices");
         assert!(!vertices.is_empty());
-        assert_contained(&vertices, capsules, name);
+        assert_contained(&vertices, &b.capsules, &b.name);
     }
 }
 
@@ -103,6 +103,6 @@ fn wrist_capsules_contain_fingers_across_full_travel() {
 fn config_covers_exactly_the_expected_bodies() {
     let (_, config, _) = assets();
     assert_eq!(config.links.len(), 14, "7 links per side");
-    let fixed: Vec<&str> = config.fixed.iter().map(|(n, _)| n.as_str()).collect();
+    let fixed: Vec<&str> = config.fixed.iter().map(|b| b.name.as_str()).collect();
     assert_eq!(fixed, ["openarm_body_link0", "openarm_left_link0", "openarm_right_link0"]);
 }

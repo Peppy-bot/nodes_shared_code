@@ -144,9 +144,9 @@ fn mesh_wireframes(args: &Args, meshes_dir: &str) -> Result<Vec<serde_json::Valu
     let config = CollisionConfig::from_file(&args.config)?.parse()?;
 
     let mut out = Vec::new();
-    for (name, _) in &config.fixed {
-        let vertices = urdf.fixed_vertices_in_root(name, meshes_dir)?;
-        out.push(wire_json(name, decimate(&vertices)));
+    for b in &config.fixed {
+        let vertices = urdf.fixed_vertices_in_root(&b.name, meshes_dir)?;
+        out.push(wire_json(&b.name, decimate(&vertices)));
     }
     for (base, q) in [(&args.left_base, &args.left), (&args.right_base, &args.right)] {
         let mut arm = Arm::from_urdf_file(&args.urdf, base)?;

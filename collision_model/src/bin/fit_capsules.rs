@@ -15,7 +15,7 @@
 //!     --out tests/fixtures/openarm_v10_capsules.json
 //! ```
 
-use collision_model::config::{BodyCapsules, CapsuleSpec, CollisionConfig};
+use collision_model::config::{BodyCapsules, CollisionConfig};
 use collision_model::fit::fit_capsules_adaptive;
 use collision_model::geometry::Capsule;
 use collision_model::nalgebra::Point3;
@@ -177,5 +177,5 @@ fn round(x: f64) -> f64 {
 }
 
 fn body(name: &str, capsules: Vec<Capsule>) -> BodyCapsules {
-    BodyCapsules { name: name.into(), capsules: capsules.iter().map(CapsuleSpec::from_capsule).collect() }
+    BodyCapsules { name: name.into(), capsules }
 }

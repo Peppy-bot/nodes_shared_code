@@ -28,12 +28,35 @@ const PARALLEL_EPS: f64 = 1e-12;
 
 /// A capsule: the set of points within `radius` of the segment `a..b`.
 /// Frame-agnostic; the segment endpoints are in whatever frame the caller
-/// works in (link-local in the config, world after placement).
-#[derive(Debug, Clone, PartialEq)]
+/// works in (link-local in the config, world after placement). Serialized
+/// as plain arrays through a shim, keeping this independent of nalgebra's
+/// serde features.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "CapsuleShim", into = "CapsuleShim")]
 pub struct Capsule {
     pub a: Point3<f64>,
     pub b: Point3<f64>,
     pub radius: f64,
+}
+
+/// On-disk shape of a [`Capsule`]: `{a: [x,y,z], b: [x,y,z], radius}`.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CapsuleShim {
+    a: [f64; 3],
+    b: [f64; 3],
+    radius: f64,
+}
+
+impl From<CapsuleShim> for Capsule {
+    fn from(s: CapsuleShim) -> Self {
+        Capsule { a: Point3::from(s.a), b: Point3::from(s.b), radius: s.radius }
+    }
+}
+
+impl From<Capsule> for CapsuleShim {
+    fn from(c: Capsule) -> Self {
+        CapsuleShim { a: c.a.into(), b: c.b.into(), radius: c.radius }
+    }
 }
 
 /// Result of a capsule-capsule query: the signed surface distance and the

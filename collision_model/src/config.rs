@@ -11,25 +11,16 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use srs_model::nalgebra::Point3;
 
 use crate::geometry::Capsule;
 use crate::pairs::PairSpec;
 
-/// One capsule as stored on disk: plain arrays, link-local or world frame
-/// depending on the section it appears in.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CapsuleSpec {
-    pub a: [f64; 3],
-    pub b: [f64; 3],
-    pub radius: f64,
-}
-
-/// A named body (a URDF link, or a fixed structure) and its capsules.
+/// A named body (a URDF link, or a fixed structure) and its capsules,
+/// link-local or world frame depending on the section it appears in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BodyCapsules {
     pub name: String,
-    pub capsules: Vec<CapsuleSpec>,
+    pub capsules: Vec<Capsule>,
 }
 
 /// The on-disk config layout.
@@ -57,30 +48,20 @@ pub struct CollisionConfig {
 #[derive(Debug, Clone)]
 pub struct LoadedConfig {
     pub source_urdf: String,
-    pub fixed: Vec<(String, Vec<Capsule>)>,
+    pub fixed: Vec<BodyCapsules>,
     pub links: HashMap<String, Vec<Capsule>>,
     pub pairs: Vec<PairSpec>,
 }
 
-impl CapsuleSpec {
-    fn parse(&self, context: &str) -> Result<Capsule, String> {
-        let nums = self.a.iter().chain(&self.b).chain([&self.radius]);
-        if nums.into_iter().any(|x| !x.is_finite()) {
-            return Err(format!("{context}: capsule has non-finite values"));
-        }
-        if self.radius <= 0.0 {
-            return Err(format!("{context}: capsule radius {} must be positive", self.radius));
-        }
-        Ok(Capsule {
-            a: Point3::new(self.a[0], self.a[1], self.a[2]),
-            b: Point3::new(self.b[0], self.b[1], self.b[2]),
-            radius: self.radius,
-        })
+fn validate_capsule(c: &Capsule, context: &str) -> Result<(), String> {
+    let nums = [c.a.x, c.a.y, c.a.z, c.b.x, c.b.y, c.b.z, c.radius];
+    if nums.iter().any(|x| !x.is_finite()) {
+        return Err(format!("{context}: capsule has non-finite values"));
     }
-
-    pub fn from_capsule(c: &Capsule) -> Self {
-        Self { a: [c.a.x, c.a.y, c.a.z], b: [c.b.x, c.b.y, c.b.z], radius: c.radius }
+    if c.radius <= 0.0 {
+        return Err(format!("{context}: capsule radius {} must be positive", c.radius));
     }
+    Ok(())
 }
 
 impl CollisionConfig {
@@ -99,24 +80,23 @@ impl CollisionConfig {
 
     /// Validate every capsule and index the link sections.
     pub fn parse(self) -> Result<LoadedConfig, String> {
-        let parse_body = |b: &BodyCapsules| -> Result<(String, Vec<Capsule>), String> {
+        let validate_body = |b: &BodyCapsules| -> Result<(), String> {
             if b.capsules.is_empty() {
                 return Err(format!("body '{}' has no capsules", b.name));
             }
-            let capsules = b
-                .capsules
-                .iter()
-                .enumerate()
-                .map(|(i, s)| s.parse(&format!("{}[{i}]", b.name)))
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok((b.name.clone(), capsules))
+            for (i, c) in b.capsules.iter().enumerate() {
+                validate_capsule(c, &format!("{}[{i}]", b.name))?;
+            }
+            Ok(())
         };
 
-        let fixed = self.fixed.iter().map(parse_body).collect::<Result<Vec<_>, _>>()?;
+        for body in self.fixed.iter().chain(&self.links) {
+            validate_body(body)?;
+        }
+        let fixed = self.fixed.clone();
         let mut links = HashMap::new();
         for body in &self.links {
-            let (name, capsules) = parse_body(body)?;
-            if links.insert(name, capsules).is_some() {
+            if links.insert(body.name.clone(), body.capsules.clone()).is_some() {
                 return Err(format!("duplicate link '{}' in capsule config", body.name));
             }
         }
@@ -151,7 +131,9 @@ impl CollisionConfig {
         };
         for body in self.fixed.iter().chain(&self.links) {
             for c in &body.capsules {
-                c.a.iter().chain(&c.b).chain([&c.radius]).for_each(|v| eat(*v));
+                for v in [c.a.x, c.a.y, c.a.z, c.b.x, c.b.y, c.b.z, c.radius] {
+                    eat(v);
+                }
             }
         }
         h
@@ -162,8 +144,10 @@ impl CollisionConfig {
 mod tests {
     use super::*;
 
-    fn spec(radius: f64) -> CapsuleSpec {
-        CapsuleSpec { a: [0.0, 0.0, 0.0], b: [0.0, 0.0, 0.1], radius }
+    use srs_model::nalgebra::Point3;
+
+    fn spec(radius: f64) -> Capsule {
+        Capsule { a: Point3::new(0.0, 0.0, 0.0), b: Point3::new(0.0, 0.0, 0.1), radius }
     }
 
     fn config(radius: f64) -> CollisionConfig {
@@ -182,7 +166,7 @@ mod tests {
         let back = CollisionConfig::from_json(&c.to_json_pretty()).expect("roundtrip");
         let loaded = back.parse().expect("valid");
         assert_eq!(loaded.links["link1"][0].radius, 0.05);
-        assert_eq!(loaded.fixed[0].0, "body");
+        assert_eq!(loaded.fixed[0].name, "body");
         assert_eq!(loaded.pairs, vec![PairSpec::new("body", "link1")]);
     }
 
@@ -232,9 +216,11 @@ mod tests {
     }
 
     #[test]
-    fn from_capsule_roundtrips_through_parse() {
+    fn capsule_json_shape_is_plain_arrays() {
         let c = Capsule { a: Point3::new(0.1, 0.2, 0.3), b: Point3::new(0.4, 0.5, 0.6), radius: 0.07 };
-        let parsed = CapsuleSpec::from_capsule(&c).parse("t").expect("valid");
-        assert_eq!(parsed, c);
+        let json = serde_json::to_string(&c).expect("serialize");
+        assert_eq!(json, r#"{"a":[0.1,0.2,0.3],"b":[0.4,0.5,0.6],"radius":0.07}"#);
+        let back: Capsule = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, c);
     }
 }

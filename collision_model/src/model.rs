@@ -104,9 +104,9 @@ impl DualArmCollisionModel {
             bodies.push(body);
             Ok(())
         };
-        for (name, capsules) in &config.fixed {
-            push_body(&mut bodies, Body { name: name.clone(), local: capsules.clone(), placement: Placement::Fixed })?;
-            world.push(capsules.clone());
+        for b in &config.fixed {
+            push_body(&mut bodies, Body { name: b.name.clone(), local: b.capsules.clone(), placement: Placement::Fixed })?;
+            world.push(b.capsules.clone());
         }
         let home = [0.0; ARM_DOF];
         for (arm, side) in [(&mut left, Placement::Left(0)), (&mut right, Placement::Right(0))] {
