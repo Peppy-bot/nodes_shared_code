@@ -4,7 +4,6 @@
 //! fit_capsules/classify_pairs invocations after changing geometry and
 //! re-baseline deliberately if values move.
 
-use collision_model::config::CollisionConfig;
 use collision_model::{DualArmCollisionModel, MarginPolicy};
 use srs_model::JointVec;
 
@@ -20,15 +19,11 @@ const HOME: JointVec = [0.0, 0.0, 0.0, 0.05, 0.0, 0.0, 0.0];
 const READY: JointVec = [0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0];
 
 fn model() -> DualArmCollisionModel {
-    let config = CollisionConfig::from_file(&format!("{FIXTURES}/openarm_v10_capsules.json"))
-        .expect("fixture config")
-        .parse()
-        .expect("valid config");
     DualArmCollisionModel::from_urdf_file(
         &format!("{FIXTURES}/openarm_v10.urdf"),
+        &format!("{FIXTURES}/meshes"),
         "openarm_left_link0",
         "openarm_right_link0",
-        &config,
         &MarginPolicy { headroom: FLOOR, references: vec![[0.0; 7], READY] },
     )
     .expect("fixture model")

@@ -1,4 +1,4 @@
-//! Minimal binary STL reader for the offline fit pipeline and tests.
+//! Minimal binary STL reader for the construction-time fit and tests.
 //!
 //! Returns raw triangle vertices (three per facet, in file order); the fit
 //! only needs the vertex cloud and the visualization only needs triangles, so

@@ -1,6 +1,6 @@
 //! Capsule fitting: the smallest-reasonable capsule containing a vertex
-//! cloud, used offline to turn each URDF collision mesh into its runtime
-//! proxy.
+//! cloud, run at model construction to turn each URDF collision mesh into
+//! its runtime proxy.
 //!
 //! Containment is exact by construction: the radius is the maximum distance
 //! of any vertex to the chosen axis segment, so every vertex (and therefore
@@ -141,6 +141,12 @@ fn repair_face_coverage(points: &[Point3<f64>], capsules: &mut [Capsule]) -> Res
     for _ in 0..8 {
         let mut worst_escape = vec![0.0_f64; capsules.len()];
         for tri in points.chunks_exact(3) {
+            // Convexity early-exit: a capsule containing all three vertices
+            // contains the whole face, no sampling needed. This is the
+            // common case for every triangle away from band boundaries.
+            if capsules.iter().any(|c| tri.iter().all(|v| c.contains(v))) {
+                continue;
+            }
             for w in &FACE_SAMPLES {
                 let p = Point3::from(tri[0].coords * w[0] + tri[1].coords * w[1] + tri[2].coords * w[2]);
                 let (mut nearest, mut escape) = (0usize, f64::INFINITY);

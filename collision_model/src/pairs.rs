@@ -2,20 +2,20 @@
 //! offset subtracted from the raw capsule distance.
 //!
 //! Pairs are data, not logic: the model checks whatever list it is given.
-//! The caller supplies the candidate set (a checked-in JSON next to its
-//! config); the classifier attaches the sampled per-pair margins.
+//! Derived models get their pair set and margins from the URDF and the
+//! policy at construction; explicit lists serve tests and special-purpose
+//! tools.
 
-/// One checked pair of bodies, by config/URDF name. `margin` is subtracted
-/// from the raw capsule distance for this pair. The classifier sets a
+/// One checked pair of bodies, by URDF link name. `margin` is subtracted
+/// from the raw capsule distance for this pair. Construction sets a
 /// negative margin for permanently snug pairs, moving their zero point to
 /// the pair's reference baseline minus the headroom: such a pair reads the
 /// headroom at rest and reaches zero only when it gets that much closer
 /// than its rest baseline.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PairSpec {
     pub a: String,
     pub b: String,
-    #[serde(default)]
     pub margin: f64,
 }
 

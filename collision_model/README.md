@@ -6,21 +6,25 @@ at a pair of joint configurations, plus a proximity law for scaling commands
 near contact.
 
 Pure Rust, no hardware or messaging dependencies. The model is built once
-from a URDF and a generated capsule config, then queried every control tick.
-The library contains no robot names; the caller supplies the URDF, the two
-chain base links, and the config. Any bimanual URDF whose arms are 7-DOF SRS
-chains (the `srs_model` contract) is supported.
+from a URDF and its collision meshes (capsule fitting happens at
+construction, ~0.25 s in release; there is no intermediate artifact to go
+stale), then queried every control tick. The library contains no robot
+names; the caller supplies the URDF, the mesh directory, and the two chain
+base links. Any bimanual URDF whose arms are 7-DOF SRS chains (the
+`srs_model` contract) is supported.
 
 ```rust
-use collision_model::{CollisionConfig, DualArmCollisionModel, GovernorBand, MarginPolicy};
+use collision_model::{DualArmCollisionModel, GovernorBand, MarginPolicy};
 
-// Config and URDF come from the caller; from_file and from_json are both
-// provided, the model itself only consumes the parsed values. The margin
-// policy names the poses that must read as clear and by how much.
-let config = CollisionConfig::from_file(&collision_config_path)?.parse()?;
-let policy = MarginPolicy { headroom: 0.04, references: vec![home_pose, ready_pose] };
-let mut model =
-    DualArmCollisionModel::from_urdf_file(&urdf_path, &left_base, &right_base, &config, &policy)?;
+// The default margin policy is 40 mm headroom at the neutral pose; add
+// application rest poses to `references` if the robot parks elsewhere.
+let mut model = DualArmCollisionModel::from_urdf_file(
+    &urdf_path,
+    &meshes_dir,
+    &left_base,
+    &right_base,
+    &MarginPolicy::default(),
+)?;
 
 // Watchdog: evaluate the live joint states of both arms.
 let p = model.min_distance(&q_left, &q_right)?;
@@ -48,7 +52,7 @@ Capsules strictly contain their meshes, verified by test on every mesh
 vertex and on sampled face points, so capsule distance is a lower bound on
 true mesh distance: the model alarms early, never late.
 
-## The fit pipeline (offline)
+## The fit (at construction)
 
 ```
 URDF collision entries
@@ -56,9 +60,8 @@ URDF collision entries
   PCA axis + shrink scan  -->   one capsule per cloud       (fit_capsule)
   adaptive axial banding  -->   compound bodies split while (fit_capsules_adaptive)
                                 it keeps reducing volume
-  attached children       -->   baked into the parent link
-  fixed bodies            -->   world-frame capsules
-                          -->   capsule config JSON
+  attached children       -->   baked into the parent link  (assemble)
+  fixed bodies            -->   root-frame capsules
 ```
 
 - Mirrored mesh references (negative scale components) are read per
@@ -75,28 +78,18 @@ URDF collision entries
   capsule list. Travel is a joint-space line, so containing both extremes
   contains every intermediate opening: any gripper position is covered
   conservatively and the runtime needs no gripper state.
-- Fixed bodies (a torso, the mount links) never move; their capsules are
-  baked in world frame.
+- Every collision-bearing link is accounted for: moving-link names come
+  from walking each chain in the URDF, attached children are baked into
+  their parents, every remaining collision link must be world-fixed (a
+  torso, the mount links) or construction fails loudly.
 
-The fit tool is robot-agnostic. Chains and fixed bodies are command-line
-inputs; moving-link names come from walking each chain in the URDF. The
-fixture invocation is the worked example:
-
-```sh
-cargo run --release --bin fit_capsules -- \
-    --urdf tests/fixtures/openarm_v10.urdf --meshes tests/fixtures/meshes \
-    --chain openarm_left_link0 --chain openarm_right_link0 \
-    --fixed openarm_body_link0 --fixed openarm_left_link0 --fixed openarm_right_link0 \
-    --out tests/fixtures/openarm_v10_capsules.json
-```
-
-Containment tests pin the checked-in fixture config to the fixture assets.
+Containment is verified by test on the fixture: every mesh vertex and
+sampled face point lies inside its body's capsule union.
 
 ## Pairs and margins (derived at construction)
 
-The config carries geometry only. Which pairs are checked, and with what
-margins, is derived when the model is built, so it can never go stale
-against the geometry:
+Which pairs are checked, and with what margins, is derived when the model
+is built:
 
 - Structural rule: two world-fixed bodies are skipped (their distance never
   changes), and same-side pairs within two moving joints of each other are
@@ -146,25 +139,28 @@ it evaluates `min_distance` on every joint-state update as a watchdog,
 holds or aborts both arms below threshold, and vets commands at the routing
 point by rejecting goals that land in violation and scaling streamed
 setpoints with the governor. Everything robot-specific arrives as
-parameters and vendored files: the URDF path, the capsule config JSON, and
-the two base-link names.
+parameters and deployed description files: the URDF path, the collision
+mesh directory, and the two base-link names.
 
 ## Visualization
 
 ```sh
 cargo run --release --bin visualize -- \
-    --urdf tests/fixtures/openarm_v10.urdf \
-    --config tests/fixtures/openarm_v10_capsules.json \
+    --urdf tests/fixtures/openarm_v10.urdf --meshes tests/fixtures/meshes \
     --left-base openarm_left_link0 --right-base openarm_right_link0 \
-    --reference 0,0,0,0,0,0,0 --reference 0,0,0,0.1,0,0,0 \
-    --left 0,0,0.9,0.4,0,0,0 --right 0,0,-0.9,0.4,0,0,0 \
-    --meshes tests/fixtures/meshes -o scene.html
+    --left -0.45,-0.1,0,0.5,0,-0.3,0 --right 0.4,0.1,0,0.7,0,-0.2,0 \
+    --wireframes -o scene.html
 ```
+
+The example pose swings both arms forward into the workspace, hands
+mid-reach in front of the torso, like the approach of a bimanual pick and
+place; it reads the margined rest floor (clear).
 
 Writes a self-contained interactive page (three.js from CDN): capsules
 colored by side, the closest pair highlighted with its witness segment and
-margin-adjusted distance, and with `--meshes <dir>` the decimated source
-meshes as wireframes for judging fit quality.
+margin-adjusted distance, and with `--wireframes` the decimated source
+meshes for judging fit quality. `--headroom` and `--reference` override the
+default margin policy to match the consumer's.
 
 ## Layout
 
@@ -172,20 +168,19 @@ meshes as wireframes for judging fit quality.
 tests/fixtures/                     OpenArm V1.0 fixture, srs_model-style
   openarm_v10.urdf                  fixture URDF
   meshes/*.stl                      fixture collision meshes
-  openarm_v10_capsules.json         generated capsule config
 src/
   geometry.rs        capsule primitive, closed-form distances
   fit.rs             PCA capsule fit, adaptive banding, face repair
   stl.rs             binary STL reader
   urdf_collision.rs  URDF collision extraction, fixed poses, child transforms
-  config.rs          JSON schema, validated loading
+  assemble.rs        construction-time fitting of all collision bodies
   pairs.rs           pair specs (explicit lists for tests and tools)
   model.rs           DualArmCollisionModel queries, pair and margin derivation
   governor.rs        direction-aware proximity scaling
-  bin/               fit_capsules, visualize
+  bin/               visualize
 tests/
-  config_containment.rs  capsules contain their meshes; config pinned to fixtures
-  dual_arm.rs            two-arm scenarios: converge, fold, separate; budgets
+  fit_containment.rs  fitted capsules contain their meshes, faces included
+  dual_arm.rs         two-arm scenarios: converge, fold, separate; budgets
 ```
 
 The fixture meshes are vendored copies of the Enactic `openarm_description`
@@ -196,9 +191,9 @@ fixed bodies are currently baked in world frame.
 ## Testing
 
 `cargo test` covers the primitives analytically (degenerate segments,
-penetration, symmetry, isometry invariance), the fit (containment by
-construction, banding, face repair), the config boundary, and the fixture
-integration scenarios: arms converging monotonically into collision, elbows
+penetration, symmetry, isometry invariance, both sides of every epsilon
+threshold), the fit (containment by construction, banding, face repair),
+and the fixture integration scenarios: arms converging monotonically into collision, elbows
 folding inward, separating sweeps holding the floor, a governor halt before
 contact, witness consistency, and non-finite rejection. `cargo test
 --release` additionally asserts the per-query time budget.

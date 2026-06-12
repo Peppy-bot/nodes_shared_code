@@ -14,7 +14,6 @@
 //! pair is highlighted, and the margin-adjusted distance is shown. Use it to
 //! eyeball fit quality against the mesh wireframes and to review scenarios.
 
-use collision_model::config::CollisionConfig;
 use collision_model::{DualArmCollisionModel, MarginPolicy};
 use collision_model::nalgebra::Point3;
 use collision_model::urdf_collision::UrdfCollisions;
@@ -33,13 +32,13 @@ fn main() {
 
 struct Args {
     urdf: String,
-    config: String,
+    meshes: String,
     left_base: String,
     right_base: String,
     left: JointVec,
     right: JointVec,
     out: String,
-    meshes: Option<String>,
+    wireframes: bool,
     headroom: f64,
     references: Vec<JointVec>,
 }
@@ -47,13 +46,13 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         urdf: String::new(),
-        config: String::new(),
+        meshes: String::new(),
         left_base: String::new(),
         right_base: String::new(),
         left: [0.0; ARM_DOF],
         right: [0.0; ARM_DOF],
         out: "scene.html".into(),
-        meshes: None,
+        wireframes: false,
         headroom: 0.04,
         references: Vec::new(),
     };
@@ -62,27 +61,22 @@ fn parse_args() -> Result<Args, String> {
         let mut value = || it.next().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
             "--urdf" => args.urdf = value()?,
-            "--config" => args.config = value()?,
+            "--meshes" | "-m" => args.meshes = value()?,
             "--left-base" => args.left_base = value()?,
             "--right-base" => args.right_base = value()?,
             "--left" | "-l" => args.left = parse_joints(&value()?)?,
             "--right" | "-r" => args.right = parse_joints(&value()?)?,
             "--out" | "-o" => args.out = value()?,
-            "--meshes" | "-m" => args.meshes = Some(value()?),
+            "--wireframes" | "-w" => args.wireframes = true,
             "--headroom" => args.headroom = value()?.parse().map_err(|e| format!("{e}"))?,
             "--reference" => args.references.push(parse_joints(&value()?)?),
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
-    if args.urdf.is_empty()
-        || args.config.is_empty()
-        || args.left_base.is_empty()
-        || args.right_base.is_empty()
-        || args.references.is_empty()
-    {
+    if args.urdf.is_empty() || args.meshes.is_empty() || args.left_base.is_empty() || args.right_base.is_empty() {
         return Err(
-            "required: --urdf <file> --config <json> --left-base <link> --right-base <link> \
-             --reference <q1,..,q7> (repeatable; match the consumer's margin policy)"
+            "required: --urdf <file> --meshes <dir> --left-base <link> --right-base <link>; \
+             --reference/--headroom default to the neutral pose and 40 mm"
                 .into(),
         );
     }
@@ -99,10 +93,20 @@ fn parse_joints(s: &str) -> Result<JointVec, String> {
 
 fn run() -> Result<(), String> {
     let args = parse_args()?;
-    let config = CollisionConfig::from_file(&args.config)?.parse()?;
-    let policy = MarginPolicy { headroom: args.headroom, references: args.references.clone() };
-    let mut model =
-        DualArmCollisionModel::from_urdf_file(&args.urdf, &args.left_base, &args.right_base, &config, &policy)?;
+    let references = if args.references.is_empty() {
+        println!("note: no --reference given, margins use the neutral pose (clamped into limits)");
+        vec![[0.0; ARM_DOF]]
+    } else {
+        args.references.clone()
+    };
+    let policy = MarginPolicy { headroom: args.headroom, references };
+    let mut model = DualArmCollisionModel::from_urdf_file(
+        &args.urdf,
+        &args.meshes,
+        &args.left_base,
+        &args.right_base,
+        &policy,
+    )?;
     let proximity = model.min_distance(&args.left, &args.right)?;
     let (witness_a, witness_b) = (proximity.on_a, proximity.on_b);
     let (link_a, link_b) = (proximity.link_a.to_string(), proximity.link_b.to_string());
@@ -129,10 +133,7 @@ fn run() -> Result<(), String> {
         }));
     }
 
-    let meshes = match &args.meshes {
-        Some(dir) => mesh_wireframes(&args, dir)?,
-        None => Vec::new(),
-    };
+    let meshes = if args.wireframes { mesh_wireframes(&args, &args.meshes)? } else { Vec::new() };
 
     let data = serde_json::json!({
         "title": format!("left {:?}  right {:?}", args.left, args.right),
@@ -157,12 +158,28 @@ fn run() -> Result<(), String> {
 /// worst-case capsules baked into the wrist.
 fn mesh_wireframes(args: &Args, meshes_dir: &str) -> Result<Vec<serde_json::Value>, String> {
     let urdf = UrdfCollisions::from_file(&args.urdf)?;
-    let config = CollisionConfig::from_file(&args.config)?.parse()?;
 
     let mut out = Vec::new();
-    for b in &config.fixed {
-        let vertices = urdf.fixed_vertices_in_root(&b.name, meshes_dir)?;
-        out.push(wire_json(&b.name, decimate(&vertices)));
+    let chain_links: Vec<String> = {
+        let mut all = Vec::new();
+        for base in [&args.left_base, &args.right_base] {
+            let mut arm = Arm::from_urdf_file(&args.urdf, base)?;
+            let posed = arm.at(&[0.0; ARM_DOF]);
+            all.extend((0..ARM_DOF).map(|i| posed.link_name(i)));
+        }
+        all
+    };
+    let attached: Vec<String> = chain_links
+        .iter()
+        .flat_map(|l| urdf.children_of(l))
+        .filter(|c| !chain_links.contains(c))
+        .collect();
+    for name in urdf.collision_link_names() {
+        if chain_links.contains(&name) || attached.contains(&name) {
+            continue;
+        }
+        let vertices = urdf.fixed_vertices_in_root(&name, meshes_dir)?;
+        out.push(wire_json(&name, decimate(&vertices)));
     }
     for (base, q) in [(&args.left_base, &args.left), (&args.right_base, &args.right)] {
         let mut arm = Arm::from_urdf_file(&args.urdf, base)?;
@@ -174,8 +191,9 @@ fn mesh_wireframes(args: &Args, meshes_dir: &str) -> Result<Vec<serde_json::Valu
                 urdf.link_vertices(&name, meshes_dir)?.iter().map(|v| pose * v).collect();
             // Attached collision-bearing children (gripper fingers) drawn at
             // full extension, matching the worst-case capsules.
+            // The next chain link is also a child; it places itself.
             for child in urdf.children_of(&name) {
-                if urdf.collisions_of(&child).is_empty() {
+                if chain_links.contains(&child) || urdf.collisions_of(&child).is_empty() {
                     continue;
                 }
                 let open = urdf.parent_joint(&child).map(|j| j.upper_limit).unwrap_or(0.0);

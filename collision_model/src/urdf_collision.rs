@@ -1,9 +1,9 @@
-//! URDF collision extraction for the offline fit pipeline: which mesh each
+//! URDF collision extraction for the construction-time fit: which mesh each
 //! link's `<collision>` uses, with what origin and scale, plus the fixed-link
 //! world poses and the prismatic finger transforms the fit composes.
 //!
-//! Runtime code never touches this module's output directly; it consumes the
-//! generated capsule config.
+//! Consumed by `assemble::fit_bodies` when the model is built; runtime
+//! queries see only the fitted capsules.
 
 use std::collections::HashMap;
 
@@ -39,19 +39,34 @@ impl CollisionMesh {
 /// Parsed URDF with the lookups the fit pipeline needs.
 pub struct UrdfCollisions {
     collisions: Vec<CollisionMesh>,
-    /// Child link name to its parent joint: (parent link, joint type, origin,
-    /// axis, upper position limit).
+    /// Child link name to its parent joint: parent link, joint kind, origin,
+    /// axis, and position limits.
     parent_joints: HashMap<String, ParentJoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JointKind {
+    Fixed,
+    Prismatic,
+    /// Revolute, continuous, planar, floating: anything whose motion is not
+    /// a pure translation.
+    OtherMovable,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParentJoint {
     pub parent_link: String,
-    pub is_fixed: bool,
+    pub kind: JointKind,
     pub origin: Isometry3<f64>,
     pub axis: Vector3<f64>,
     pub lower_limit: f64,
     pub upper_limit: f64,
+}
+
+impl ParentJoint {
+    pub fn is_fixed(&self) -> bool {
+        self.kind == JointKind::Fixed
+    }
 }
 
 impl UrdfCollisions {
@@ -77,9 +92,14 @@ impl UrdfCollisions {
 
         let mut parent_joints = HashMap::new();
         for j in &robot.joints {
+            let kind = match j.joint_type {
+                urdf_rs::JointType::Fixed => JointKind::Fixed,
+                urdf_rs::JointType::Prismatic => JointKind::Prismatic,
+                _ => JointKind::OtherMovable,
+            };
             let pj = ParentJoint {
                 parent_link: j.parent.link.clone(),
-                is_fixed: matches!(j.joint_type, urdf_rs::JointType::Fixed),
+                kind,
                 origin: pose_to_isometry(&j.origin),
                 axis: Vector3::new(j.axis.xyz[0], j.axis.xyz[1], j.axis.xyz[2]),
                 lower_limit: j.limit.lower,
@@ -103,6 +123,17 @@ impl UrdfCollisions {
         self.collisions.iter().filter(|c| c.link == link).collect()
     }
 
+    /// Distinct names of links that declare mesh collisions, in URDF order.
+    pub fn collision_link_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for c in &self.collisions {
+            if !names.contains(&c.link) {
+                names.push(c.link.clone());
+            }
+        }
+        names
+    }
+
     /// The joint whose child is `link`, if any.
     pub fn parent_joint(&self, link: &str) -> Option<&ParentJoint> {
         self.parent_joints.get(link)
@@ -116,7 +147,7 @@ impl UrdfCollisions {
             .filter(|(_, j)| j.parent_link == link)
             .map(|(child, _)| child.clone())
             .collect();
-        children.sort(); // HashMap order is not deterministic; the config is
+        children.sort(); // HashMap order is not deterministic; callers need stable output
         children
     }
 
@@ -142,19 +173,32 @@ impl UrdfCollisions {
         Ok(self.link_vertices(link, meshes_dir)?.into_iter().map(|v| pose * v).collect())
     }
 
-    /// Collision vertices of `child` (a movable joint's child link, e.g. a
-    /// prismatic finger) at joint position `q`, mapped into the parent link's
-    /// frame.
+    /// Collision vertices of `child` at joint position `q`, mapped into the
+    /// parent link's frame. Only fixed (`q` ignored) and prismatic children
+    /// are supported: a translation is the only motion for which positions
+    /// along the travel interpolate linearly (the basis for extremes-union
+    /// containment). A revolute child sweeps an arc and is rejected.
     pub fn child_vertices_in_parent(&self, child: &str, q: f64, meshes_dir: &str) -> Result<Vec<Point3<f64>>, String> {
         let j = self
             .parent_joint(child)
             .ok_or_else(|| format!("link '{child}' has no parent joint"))?;
-        let norm = j.axis.norm();
-        if norm < 1e-12 {
-            return Err(format!("link '{child}' parent joint has a zero axis"));
-        }
-        // URDF axes are conventionally unit but the spec does not require it.
-        let pose = j.origin * Translation3::from(j.axis * (q / norm));
+        let pose = match j.kind {
+            JointKind::Fixed => j.origin,
+            JointKind::Prismatic => {
+                let norm = j.axis.norm();
+                if norm < 1e-12 {
+                    return Err(format!("link '{child}' parent joint has a zero axis"));
+                }
+                // URDF axes are conventionally unit but the spec does not require it.
+                j.origin * Translation3::from(j.axis * (q / norm))
+            }
+            JointKind::OtherMovable => {
+                return Err(format!(
+                    "link '{child}' hangs off a non-prismatic movable joint; its travel is not \
+                     a translation, so extremes do not bound it. Model it as part of a chain instead."
+                ));
+            }
+        };
         Ok(self.link_vertices(child, meshes_dir)?.into_iter().map(|v| pose * v).collect())
     }
 
@@ -169,7 +213,7 @@ impl UrdfCollisions {
             let Some(j) = self.parent_joints.get(&current) else {
                 return Ok(pose); // reached the root
             };
-            if !j.is_fixed {
+            if !j.is_fixed() {
                 return Err(format!("link '{link}' hangs below movable joint into '{current}', not world-fixed"));
             }
             pose = j.origin * pose;
@@ -224,6 +268,21 @@ mod tests {
     </robot>"#;
 
     #[test]
+    fn rejects_baking_a_revolute_child() {
+        let u = UrdfCollisions::from_urdf(URDF).expect("parse");
+        let err = u.child_vertices_in_parent("arm1", 0.5, "/nonexistent").expect_err("revolute child");
+        assert!(err.contains("not a translation"), "{err}");
+    }
+
+    #[test]
+    fn rejects_a_prismatic_child_with_a_zero_axis() {
+        let zero_axis = URDF.replace(r#"<axis xyz="0 -1 0"/>"#, r#"<axis xyz="0 0 0"/>"#);
+        let u = UrdfCollisions::from_urdf(&zero_axis).expect("parse");
+        let err = u.child_vertices_in_parent("finger", 0.02, "/nonexistent").expect_err("zero axis");
+        assert!(err.contains("zero axis"), "{err}");
+    }
+
+    #[test]
     fn extracts_mesh_scale_and_origin() {
         let u = UrdfCollisions::from_urdf(URDF).expect("parse");
         let arm = u.collisions_of("arm1");
@@ -260,7 +319,7 @@ mod tests {
         let u = UrdfCollisions::from_urdf(URDF).expect("parse");
         let j = u.parent_joint("finger").expect("finger has parent");
         assert_eq!(j.parent_link, "arm1");
-        assert!(!j.is_fixed);
+        assert!(!j.is_fixed());
         assert_eq!(j.axis, Vector3::new(0.0, -1.0, 0.0));
         assert!((j.upper_limit - 0.04).abs() < 1e-12);
     }

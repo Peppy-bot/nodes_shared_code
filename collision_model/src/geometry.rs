@@ -11,8 +11,8 @@ use srs_model::nalgebra::{Isometry3, Point3};
 /// (its capsule to a sphere) and direction-dependent math switches to the
 /// point form. The threshold is a 1e-12 m segment: collapsing it to a point
 /// perturbs any distance by at most that length, six orders of magnitude
-/// under the micrometer config grid, while staying three orders above f64
-/// coordinate noise at meter scale (~1e-15), so no real segment is ever
+/// under any millimeter-scale threshold, while staying three orders above
+/// f64 coordinate noise at meter scale (~1e-15), so no real segment is ever
 /// misclassified. Tested at both sides of the boundary.
 const DEGENERATE_EPS2: f64 = 1e-24;
 
@@ -28,35 +28,12 @@ const PARALLEL_EPS: f64 = 1e-12;
 
 /// A capsule: the set of points within `radius` of the segment `a..b`.
 /// Frame-agnostic; the segment endpoints are in whatever frame the caller
-/// works in (link-local in the config, world after placement). Serialized
-/// as plain arrays through a shim, keeping this independent of nalgebra's
-/// serde features.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(from = "CapsuleShim", into = "CapsuleShim")]
+/// works in (link-local at fit time, world after placement).
+#[derive(Debug, Clone, PartialEq)]
 pub struct Capsule {
     pub a: Point3<f64>,
     pub b: Point3<f64>,
     pub radius: f64,
-}
-
-/// On-disk shape of a [`Capsule`]: `{a: [x,y,z], b: [x,y,z], radius}`.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CapsuleShim {
-    a: [f64; 3],
-    b: [f64; 3],
-    radius: f64,
-}
-
-impl From<CapsuleShim> for Capsule {
-    fn from(s: CapsuleShim) -> Self {
-        Capsule { a: Point3::from(s.a), b: Point3::from(s.b), radius: s.radius }
-    }
-}
-
-impl From<Capsule> for CapsuleShim {
-    fn from(c: Capsule) -> Self {
-        CapsuleShim { a: c.a.into(), b: c.b.into(), radius: c.radius }
-    }
 }
 
 /// Result of a capsule-capsule query: the signed surface distance and the

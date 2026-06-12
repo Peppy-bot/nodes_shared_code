@@ -16,13 +16,25 @@ use std::collections::HashMap;
 use srs_model::nalgebra::{Isometry3, Point3};
 use srs_model::{ARM_DOF, Arm, JointVec};
 
-use crate::config::LoadedConfig;
+use crate::assemble::fit_bodies;
 use crate::geometry::Capsule;
 use crate::pairs::PairSpec;
-/// How margins are derived at construction. Margined pairs read exactly
-/// `headroom` at their worst reference pose, so a watchdog threshold or
-/// governor `d_safe` must stay below `headroom` or rest poses throttle.
-/// References are clamped into each arm's own joint limits before use.
+use crate::urdf_collision::UrdfCollisions;
+/// The caller's safety assertions for margin derivation, applied per pair
+/// at construction.
+///
+/// `references` are joint configurations (applied to both arms, clamped
+/// into each arm's own limits) that the caller declares legitimate and
+/// expects to read as clear. Pairs that sit closer than `headroom` at any
+/// reference get that closeness rebased to read `headroom` there; the model
+/// cannot know which poses are legitimate, so a reference that is actually
+/// a collision weakens protection for exactly the pairs it touches. There
+/// is deliberately no default: declaring these poses is the caller's
+/// statement about the robot, not a library guess.
+///
+/// `headroom` also carries the buffer role: the fitted capsules are tight
+/// around their meshes with no added padding, so size the headroom to
+/// absorb tracking error and watchdog reaction distance.
 #[derive(Debug, Clone)]
 pub struct MarginPolicy {
     pub headroom: f64,
@@ -104,15 +116,17 @@ pub struct DualArmCollisionModel {
 }
 
 impl DualArmCollisionModel {
-    /// Build from the URDF (both chains) and the generated capsule config,
-    /// deriving the checked pairs and their margins from the URDF and the
-    /// margin policy. Every moving link must have capsules: failing loudly
-    /// at construction beats silently not checking a body at runtime.
+    /// Build from the URDF (both chains) and its collision meshes, fitting
+    /// the capsules and deriving the checked pairs and their margins at
+    /// construction; there is no intermediate artifact to go stale. Mesh
+    /// files are resolved as `<meshes_dir>/<basename>` from the URDF's
+    /// collision entries. Fitting the fixture robot takes ~0.25 s in
+    /// release.
     pub fn new(
         urdf: &str,
+        meshes_dir: &str,
         left_base: &str,
         right_base: &str,
-        config: &LoadedConfig,
         policy: &MarginPolicy,
     ) -> Result<Self, String> {
         policy.validate()?;
@@ -125,7 +139,7 @@ impl DualArmCollisionModel {
         // would smear the global minimum with noise while real contact
         // between them is blocked by the link in between. Cross-arm pairs
         // are always checked; the arms are independently driven.
-        let mut probe = Self::with_pairs(urdf, left_base, right_base, config, &derive_probe_pairs(config))?;
+        let mut probe = Self::with_pairs(urdf, meshes_dir, left_base, right_base, &[])?;
         let lineage: Vec<(String, Lineage)> = probe
             .bodies
             .iter()
@@ -185,58 +199,67 @@ impl DualArmCollisionModel {
             }
         }
 
-        Self::with_pairs(urdf, left_base, right_base, config, &specs)
+        probe.set_pairs(&specs)?;
+        Ok(probe)
     }
 
     /// Like [`new`](Self::new) but checking an explicit pair list with the
-    /// margins given (tests and special-purpose tools).
+    /// margins given (tests and special-purpose tools). An empty list
+    /// builds the bodies with no checked pairs; call
+    /// [`set_pairs`](Self::set_pairs) before querying.
     pub fn with_pairs(
         urdf: &str,
+        meshes_dir: &str,
         left_base: &str,
         right_base: &str,
-        config: &LoadedConfig,
         pair_specs: &[PairSpec],
     ) -> Result<Self, String> {
         let mut left = Arm::from_urdf(urdf, left_base)?;
         let mut right = Arm::from_urdf(urdf, right_base)?;
 
+        let home = [0.0; ARM_DOF];
+        let chain_names = |arm: &mut Arm| -> Vec<String> {
+            let posed = arm.at(&home);
+            (0..ARM_DOF).map(|i| posed.link_name(i)).collect()
+        };
+        let left_names = chain_names(&mut left);
+        let right_names = chain_names(&mut right);
+
+        let parsed = UrdfCollisions::from_urdf(urdf)?;
+        let fitted = fit_bodies(&parsed, &[left_names.clone(), right_names.clone()], meshes_dir)?;
+
         let mut bodies: Vec<Body> = Vec::new();
         let mut world = Vec::new();
         let push_body = |bodies: &mut Vec<Body>, body: Body| -> Result<(), String> {
             if bodies.iter().any(|b| b.name == body.name) {
-                return Err(format!("duplicate body name '{}' in config", body.name));
+                return Err(format!("duplicate body name '{}'", body.name));
             }
             bodies.push(body);
             Ok(())
         };
-        for b in &config.fixed {
-            push_body(&mut bodies, Body { name: b.name.clone(), local: b.capsules.clone(), placement: Placement::Fixed })?;
-            world.push(b.capsules.clone());
+        for (name, capsules) in fitted.fixed {
+            world.push(capsules.clone());
+            push_body(&mut bodies, Body { name, local: capsules, placement: Placement::Fixed })?;
         }
-        let home = [0.0; ARM_DOF];
-        for (arm, side) in [(&mut left, Placement::Left(0)), (&mut right, Placement::Right(0))] {
-            let names: Vec<String> = {
-                let posed = arm.at(&home);
-                (0..ARM_DOF).map(|i| posed.link_name(i)).collect()
-            };
-            for (i, name) in names.into_iter().enumerate() {
-                let capsules = config
-                    .links
-                    .get(&name)
-                    .ok_or_else(|| format!("capsule config has no link '{name}'"))?
-                    .clone();
-                let placement = match side {
-                    Placement::Left(_) => Placement::Left(i),
-                    _ => Placement::Right(i),
-                };
+        for (names, side_left) in [(&left_names, true), (&right_names, false)] {
+            for (i, name) in names.iter().enumerate() {
+                let capsules = fitted.links.get(name).expect("fit_bodies covers every chain link").clone();
+                let placement = if side_left { Placement::Left(i) } else { Placement::Right(i) };
                 world.push(capsules.clone());
-                push_body(&mut bodies, Body { name, local: capsules, placement })?;
+                push_body(&mut bodies, Body { name: name.clone(), local: capsules, placement })?;
             }
         }
 
+        let mut model = Self { left, right, bodies, pairs: Vec::new(), world };
+        model.set_pairs(pair_specs)?;
+        Ok(model)
+    }
+
+    /// Replace the checked pair list (names resolved against the bodies).
+    fn set_pairs(&mut self, pair_specs: &[PairSpec]) -> Result<(), String> {
         let index: HashMap<&str, usize> =
-            bodies.iter().enumerate().map(|(i, b)| (b.name.as_str(), i)).collect();
-        let pairs = pair_specs
+            self.bodies.iter().enumerate().map(|(i, b)| (b.name.as_str(), i)).collect();
+        self.pairs = pair_specs
             .iter()
             .map(|p| {
                 let a = *index.get(p.a.as_str()).ok_or_else(|| format!("pair references unknown body '{}'", p.a))?;
@@ -250,23 +273,25 @@ impl DualArmCollisionModel {
                 Ok(Pair { a, b, margin: p.margin })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        if pairs.is_empty() {
-            return Err("no pairs to check".into());
-        }
-
-        Ok(Self { left, right, bodies, pairs, world })
+        Ok(())
     }
 
     /// Like [`new`](Self::new) but reading the URDF from a file.
     pub fn from_urdf_file(
         path: &str,
+        meshes_dir: &str,
         left_base: &str,
         right_base: &str,
-        config: &LoadedConfig,
         policy: &MarginPolicy,
     ) -> Result<Self, String> {
         let urdf = std::fs::read_to_string(path).map_err(|e| format!("read urdf '{path}': {e}"))?;
-        Self::new(&urdf, left_base, right_base, config, policy)
+        Self::new(&urdf, meshes_dir, left_base, right_base, policy)
+    }
+
+    /// Link-local capsules of a body (fixed bodies are in the root frame),
+    /// for diagnostics and the containment tests.
+    pub fn local_capsules(&self, name: &str) -> Option<Vec<Capsule>> {
+        self.bodies.iter().find(|b| b.name == name).map(|b| b.local.clone())
     }
 
     /// The checked pairs and their margins, for diagnostics and tests.
@@ -309,7 +334,9 @@ impl DualArmCollisionModel {
                 }
             }
         }
-        let c = best.expect("constructor guarantees at least one pair");
+        let Some(c) = best else {
+            return Err("no pairs to check".into());
+        };
         Ok(Proximity {
             distance: c.distance,
             link_a: &self.bodies[c.a].name,
@@ -370,15 +397,6 @@ enum Lineage {
     Side(u8, usize),
 }
 
-/// A minimal pair list (one arbitrary pair) used to construct the probe
-/// model that the real pair derivation then measures with.
-fn derive_probe_pairs(config: &LoadedConfig) -> Vec<PairSpec> {
-    let mut names = config.fixed.iter().map(|b| b.name.clone()).chain(config.links.keys().cloned());
-    let a = names.next().expect("config has bodies");
-    let b = names.next().expect("config has at least two bodies");
-    vec![PairSpec::new(a, b)]
-}
-
 fn link_poses(arm: &mut Arm, q: &JointVec) -> [Isometry3<f64>; ARM_DOF] {
     let posed = arm.at(q);
     std::array::from_fn(|i| posed.link_pose_world(i))
@@ -387,10 +405,10 @@ fn link_poses(arm: &mut Arm, q: &JointVec) -> [Isometry3<f64>; ARM_DOF] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::CollisionConfig;
     use crate::pairs::PairSpec;
 
     const URDF: &str = include_str!("../tests/fixtures/openarm_v10.urdf");
+    const MESHES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/meshes");
 
     fn policy() -> MarginPolicy {
         MarginPolicy {
@@ -399,36 +417,23 @@ mod tests {
         }
     }
 
-    fn loaded() -> LoadedConfig {
-        CollisionConfig::from_json(include_str!("../tests/fixtures/openarm_v10_capsules.json"))
-            .expect("embedded config")
-            .parse()
-            .expect("valid config")
-    }
-
-    fn build(config: &LoadedConfig, pairs: &[PairSpec]) -> Result<DualArmCollisionModel, String> {
-        DualArmCollisionModel::with_pairs(URDF, "openarm_left_link0", "openarm_right_link0", config, pairs)
+    fn build(pairs: &[PairSpec]) -> Result<DualArmCollisionModel, String> {
+        DualArmCollisionModel::with_pairs(URDF, MESHES, "openarm_left_link0", "openarm_right_link0", pairs)
     }
 
     #[test]
-    fn rejects_duplicate_body_names_unknown_pairs_and_empty_pairs() {
+    fn rejects_unknown_pairs_and_querying_with_no_pairs() {
         let err = |r: Result<DualArmCollisionModel, String>| r.err().expect("expected an error");
-        let mut config = loaded();
-        config.fixed.push(config.fixed[0].clone());
-        let pairs = [PairSpec::new("openarm_left_link1", "openarm_right_link1")];
-        assert!(err(build(&config, &pairs)).contains("duplicate body"));
-
-        let config = loaded();
         let bad = [PairSpec::new("openarm_left_link1", "no_such_body")];
-        assert!(err(build(&config, &bad)).contains("unknown body"));
+        assert!(err(build(&bad)).contains("unknown body"));
 
-        assert!(err(build(&config, &[])).contains("no pairs"));
+        let mut empty = build(&[]).expect("bodies build without pairs");
+        assert!(empty.min_distance(&[0.0; ARM_DOF], &[0.0; ARM_DOF]).is_err());
     }
 
     #[test]
     fn margined_winner_reports_adjusted_distance_and_raw_witnesses() {
-        let config = loaded();
-        let mut m = DualArmCollisionModel::new(URDF, "openarm_left_link0", "openarm_right_link0", &config, &policy())
+        let mut m = DualArmCollisionModel::new(URDF, MESHES, "openarm_left_link0", "openarm_right_link0", &policy())
             .expect("model");
         let q = [0.0, 0.0, 0.0, 0.05, 0.0, 0.0, 0.0];
         let margins: Vec<(String, String, f64)> =
@@ -453,9 +458,8 @@ mod tests {
     fn multi_capsule_bodies_take_part_in_the_minimum() {
         // Wrists wrapped toward each other: the winning bodies carry several
         // capsules (wrist bands + fingers), exercising the inner loops.
-        let mut m =
-            DualArmCollisionModel::new(URDF, "openarm_left_link0", "openarm_right_link0", &loaded(), &policy())
-                .expect("model");
+        let mut m = DualArmCollisionModel::new(URDF, MESHES, "openarm_left_link0", "openarm_right_link0", &policy())
+            .expect("model");
         let ql = [0.0, 0.0, 1.2, 0.4, 0.0, 0.0, 0.0];
         let qr = [0.0, 0.0, -1.2, 0.4, 0.0, 0.0, 0.0];
         let p = m.min_distance(&ql, &qr).expect("query");
@@ -465,9 +469,8 @@ mod tests {
 
     #[test]
     fn derived_pairs_skip_fixed_pairs_and_adjacency_and_margin_snug_bodies() {
-        let mut m =
-            DualArmCollisionModel::new(URDF, "openarm_left_link0", "openarm_right_link0", &loaded(), &policy())
-                .expect("model");
+        let mut m = DualArmCollisionModel::new(URDF, MESHES, "openarm_left_link0", "openarm_right_link0", &policy())
+            .expect("model");
         let margins: Vec<(String, String, f64)> =
             m.pair_margins().iter().map(|(a, b, v)| (a.to_string(), b.to_string(), *v)).collect();
         let has = |a: &str, b: &str| {
@@ -497,9 +500,8 @@ mod tests {
 
     #[test]
     fn rejects_bad_margin_policies() {
-        let config = loaded();
         let build = |policy: &MarginPolicy| {
-            DualArmCollisionModel::new(URDF, "openarm_left_link0", "openarm_right_link0", &config, policy)
+            DualArmCollisionModel::new(URDF, MESHES, "openarm_left_link0", "openarm_right_link0", policy)
         };
         assert!(build(&MarginPolicy { headroom: 0.0, references: vec![[0.0; ARM_DOF]] }).is_err());
         assert!(build(&MarginPolicy { headroom: f64::NAN, references: vec![[0.0; ARM_DOF]] }).is_err());
@@ -511,9 +513,8 @@ mod tests {
 
     #[test]
     fn world_capsules_rejects_non_finite_configurations() {
-        let mut m =
-            DualArmCollisionModel::new(URDF, "openarm_left_link0", "openarm_right_link0", &loaded(), &policy())
-                .expect("model");
+        let mut m = DualArmCollisionModel::new(URDF, MESHES, "openarm_left_link0", "openarm_right_link0", &policy())
+            .expect("model");
         let mut bad = [0.0; ARM_DOF];
         bad[0] = f64::NAN;
         assert!(m.world_capsules(&bad, &[0.0; ARM_DOF]).is_err());
