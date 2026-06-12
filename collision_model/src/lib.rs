@@ -12,9 +12,14 @@
 //!
 //! Pure Rust, no hardware or messaging deps, same discipline as `srs_model`.
 
+pub mod config;
+pub mod fit;
 pub mod geometry;
 mod governor;
+pub mod stl;
+pub mod urdf_collision;
 
+pub use config::{CollisionConfig, LoadedConfig};
 pub use geometry::{Capsule, CapsuleDistance, point_segment_distance, segment_segment_closest};
 pub use governor::GovernorBand;
 
