@@ -7,8 +7,8 @@ near contact.
 
 Pure Rust, no hardware or messaging dependencies. The model is built once
 from a URDF and its collision meshes (capsule fitting happens at
-construction, ~0.25 s in release; there is no intermediate artifact to go
-stale), then queried every control tick. The library contains no robot
+construction, under a second in release; there is no intermediate artifact
+to go stale), then queried every control tick. The library contains no robot
 names; the caller supplies the URDF, the mesh directory, and the two chain
 base links. Any bimanual URDF whose arms are 7-DOF SRS chains (the
 `srs_model` contract) is supported.
@@ -45,44 +45,50 @@ let allowed_fraction = band.scale(d_now, d_next);
 
 ## Capsules
 
-Every link is wrapped in one or more capsules (sphere-swept segments) fitted
-at construction from the URDF's collision meshes. Capsule-capsule distance is closed
-form and branch-light; a full query over the fixture robot (99 checked
-pairs, ~390 capsule-capsule distances) measures ~23 us in release, and a
-release-mode test asserts the budget stays under 1 ms.
+Every collision mesh is wrapped in one capsule (a sphere-swept segment) fitted
+at construction from the URDF. Capsule-capsule distance is closed form and
+branch-light; a full query over the fixture robot (103 checked pairs, ~160
+capsule-capsule distances) measures ~10 us in release, and a release-mode test
+asserts the budget stays under 1 ms. All bodies fit in tens of milliseconds.
 
-Capsules strictly contain their meshes, verified by test on every mesh
-vertex and on sampled face points, so capsule distance is a lower bound on
-true mesh distance: the model alarms early, never late. The fit is tight:
-the radius is exactly what the worst mesh vertex requires, with no safety
-padding added, so any visual slack (the elbow) is shape mismatch between an
-L-shaped link and a straight capsule, not a buffer. The buffer lives in the
-governor band, where it is visible and tunable.
-One upstream gap is covered and pinned by test: the palm crossbar has no
-collision entry in the description, and the wrist capsule union is verified
-to contain it at its only physically possible placement.
+Capsules strictly contain their meshes, verified by test on every mesh vertex
+and a dense scan of every triangle face. A capsule is convex, so a capsule that
+holds a mesh's vertices holds its faces too: containment is exact, with no
+repair step and no escape, and capsule distance is a true lower bound on mesh
+distance. The model alarms early, never late. The radius is exactly what the
+worst vertex requires, with no padding; the governor band carries the buffer.
+
+One capsule per mesh is loose on a compound shape (the forked elbow yoke, the
+torso), where one radius spans the whole girth. That looseness is largely
+absorbed: the reference-pose rebasing reads a link resting inside a fat torso
+proxy as the band's `d_safe`, not an alarm. Tighter multi-primitive fits are
+deferred future work (see below). One upstream gap is covered and pinned by
+test: the palm crossbar has no collision entry in the description, and the
+wrist capsules are verified to contain it at its only physical placement.
 
 ## The fit (at construction)
 
 ```
 URDF collision entries
-  mesh + origin + scale   -->   per-link vertex clouds      (urdf_collision, stl)
-  PCA axis + shrink scan  -->   one capsule per cloud       (fit_capsule)
-  adaptive axial banding  -->   compound bodies split while (fit_capsules_adaptive)
-                                it keeps reducing volume
-  attached children       -->   baked into the parent link  (assemble)
-  fixed bodies            -->   root-frame capsules
+  mesh + origin + scale     -->   per-link vertex clouds     (urdf_collision, stl)
+  PCA axis + extremal caps  -->   one capsule per mesh        (fit_capsule)
+  attached children         -->   baked into the parent link (assemble)
+  fixed bodies              -->   root-frame capsules
 ```
 
+- Each capsule is a line-swept sphere fitted by the construction of Larsen,
+  Gottschalk, Lin & Manocha, "Fast Proximity Queries with Swept Sphere
+  Volumes" (UNC TR99-018; IEEE ICRA 2000): the dominant covariance axis is the
+  capsule axis, the radius encloses the vertices projected onto the
+  perpendicular plane, and the caps cover the axial extremes. One capsule per
+  link is the standard distance-based safety proxy (Balan & Bone, "Safe
+  human-robot interaction based on dynamic sphere-swept line bounding volumes",
+  RCIM 26(5), 2010; the capsule proxies in MoveIt and HPP-FCL). Strict
+  containment is constructive: the radius is the worst vertex's distance to the
+  segment, and a capsule is convex, so containing the vertices contains the
+  faces.
 - Mirrored mesh references (negative scale components) are read per
   collision entry from the URDF; there is no runtime mirroring logic.
-- Banding is adaptive: band counts from one up to a per-body ceiling are
-  tried, and a larger count wins only by reducing total capsule volume at
-  least 5%. Volume is the phantom space a proxy adds, and each extra band
-  pays for its own end caps, so uniform shapes stay single-capsule while
-  compound shapes split. A capsule union is not convex, so a face-coverage
-  repair pass then samples every mesh face and grows leaking bands until
-  the union contains faces, not only vertices.
 - A movable child hanging off a chain link (a gripper finger) is fitted
   over the union of its travel extremes and stored in the parent link's
   capsule list. Travel is a joint-space line, so containing both extremes
@@ -93,8 +99,22 @@ URDF collision entries
   their parents, every remaining collision link must be world-fixed (a
   torso, the mount links) or construction fails loudly.
 
-Containment is verified by test on the fixture: every mesh vertex and
-sampled face point lies inside its body's capsule union.
+Containment is verified by test on the fixture: every mesh vertex and a
+dense scan of every triangle face lies inside its body's capsule(s).
+
+### Future work: tighter compound links
+
+One capsule is fat on a forked or L-shaped link (the elbow yoke) and on the
+torso, where a single radius must span the whole girth. That inflates those
+bodies' proximity readings and can throttle motion earlier than the geometry
+requires. Two literature routes tighten a compound link, both deferred until
+false throttles prove the need: medial-axis sphere sets per link (Hubbard, ACM
+TOG 1996; Bradshaw & O'Sullivan, ACM TOG 2004; NVIDIA cuRobo) and per-segment
+capsule decomposition. Both make a body a *union* of primitives, which is not
+convex, so either must be paired with a face-coverage step: a mesh face
+spanning two primitives can leak between them, and without closing that the
+proxy is no longer a conservative lower bound. That coverage step (and its
+construction cost) is why it is out of scope for the single-consumer version.
 
 ## Pairs and their readings (derived at construction)
 
@@ -191,7 +211,7 @@ symlinks, and exposes the paths and base links as parameters:
 ```rust
 use bimanual_collision_model::{BimanualCollisionModel, GovernorBand, MarginPolicy};
 
-// Bringup, once (~0.25 s release; bimanual fit + pair derivation).
+// Bringup, once (under a second in release; bimanual fit + pair derivation).
 // The two tuned numbers. d_stop must cover tracking drift plus worst
 // closing speed times watchdog latency; measure both before trusting it.
 let band = GovernorBand::new(0.01, 0.03)?;
@@ -270,7 +290,7 @@ tests/fixtures/                     OpenArm V1.0 fixture, srs_model-style
   meshes/*.stl                      fixture collision meshes
 src/
   geometry.rs        capsule primitive, closed-form distances
-  fit.rs             PCA capsule fit, adaptive banding, face repair
+  fit.rs             LSS capsule fit (one capsule per mesh)
   stl.rs             binary STL reader
   urdf_collision.rs  URDF collision extraction, fixed poses, child transforms
   assemble.rs        construction-time fitting of all collision bodies
@@ -319,8 +339,10 @@ re-export from `srs_model` to `k` and inherits the nalgebra 0.30 pin.
 
 `cargo test` covers the primitives analytically (degenerate segments,
 penetration, symmetry, isometry invariance, both sides of every epsilon
-threshold), the fit (containment by construction, banding, face repair),
-and the fixture integration scenarios: arms converging monotonically into collision, elbows
+threshold), the fit (a tightly fitted cylinder, a blob collapsing to a
+sphere, collinear and single points, random clouds, and containment of every
+fixture mesh vertex and a dense scan of every face), and the fixture
+integration scenarios: arms converging monotonically into collision, arms
 folding inward, separating sweeps holding the floor, a governor halt before
 contact, witness consistency, and non-finite rejection. `cargo test
 --release` additionally asserts the per-query time budget.

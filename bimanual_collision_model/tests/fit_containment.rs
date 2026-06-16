@@ -1,8 +1,10 @@
 //! Capsules fitted at construction must conservatively contain the meshes
 //! they came from: containment of every vertex and sampled face point
 //! implies the capsule distance is a lower bound on true mesh distance, so
-//! the model can alarm early, never late. A capsule union is not convex, so
-//! vertex containment alone does not imply face containment across bands.
+//! the model can alarm early, never late. A single capsule is convex, so it
+//! holds a mesh's faces once it holds the vertices; where a body carries
+//! several capsules (a wrist plus its fingers) the union is not convex, so the
+//! dense face scan guards against a face leaking between them.
 
 use bimanual_collision_model::geometry::Capsule;
 use bimanual_collision_model::nalgebra::Point3;
@@ -27,6 +29,13 @@ fn fixture() -> (UrdfCollisions, BimanualCollisionModel, String) {
     (urdf, model, format!("{FIXTURES}/meshes"))
 }
 
+/// Dense uniform barycentric scan: every face that no single capsule already
+/// contains is sampled on an `n`-by-`n` grid. A sparse fixed sample set is not
+/// an upper bound on a non-convex union (a face dips into the gap between two
+/// capsules anywhere between samples), so this scans finely enough to catch a
+/// multi-millimetre leak independently of how the fit certifies coverage.
+const GRID: usize = 24;
+
 fn assert_contained(vertices: &[Point3<f64>], capsules: &[Capsule], what: &str) {
     let union_escape = |p: &Point3<f64>| {
         capsules
@@ -43,14 +52,12 @@ fn assert_contained(vertices: &[Point3<f64>], capsules: &[Capsule], what: &str) 
         }) {
             continue;
         }
-        for w in [
-            [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0],
-            [0.5, 0.5, 0.0], [0.5, 0.0, 0.5], [0.0, 0.5, 0.5],
-            [0.25, 0.75, 0.0], [0.75, 0.0, 0.25], [0.0, 0.25, 0.75],
-            [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0],
-        ] {
-            let p = Point3::from(tri[0].coords * w[0] + tri[1].coords * w[1] + tri[2].coords * w[2]);
-            worst = worst.max(union_escape(&p));
+        for i in 0..=GRID {
+            for j in 0..=(GRID - i) {
+                let (a, b) = (i as f64 / GRID as f64, j as f64 / GRID as f64);
+                let p = Point3::from(tri[0].coords * a + tri[1].coords * b + tri[2].coords * (1.0 - a - b));
+                worst = worst.max(union_escape(&p));
+            }
         }
     }
     assert!(worst <= TOL, "{what}: a mesh face point sticks {worst:.2e} m out of the capsule union");

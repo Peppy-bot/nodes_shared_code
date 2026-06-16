@@ -158,9 +158,9 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-/// World-frame decimated triangle soup per body, from the same URDF + STL
-/// pipeline the fit used. Fingers are drawn at full open, matching the
-/// worst-case capsules baked into the wrist.
+/// World-frame decimated triangles per body, from the same URDF + STL
+/// pipeline the fit used. Fingers are drawn across their full travel, matching
+/// the worst-case envelope baked into the wrist capsule.
 fn mesh_wireframes(args: &Args, meshes_dir: &str) -> Result<Vec<serde_json::Value>, String> {
     let urdf = UrdfCollisions::from_file(&args.urdf)?;
 
@@ -194,15 +194,19 @@ fn mesh_wireframes(args: &Args, meshes_dir: &str) -> Result<Vec<serde_json::Valu
             let pose = posed.link_pose_world(i);
             let mut vertices: Vec<Point3<f64>> =
                 urdf.link_vertices(&name, meshes_dir)?.iter().map(|v| pose * v).collect();
-            // Attached collision-bearing children (gripper fingers) drawn at
-            // full extension, matching the worst-case capsules. The next
-            // chain link is also a child; it places itself.
+            // Attached collision-bearing children (gripper fingers) drawn over
+            // their full travel, the same both-extremes envelope baked into the
+            // wrist capsule. The next chain link is also a child; it places
+            // itself.
             for child in urdf.children_of(&name) {
                 if chain_links.contains(&child) || urdf.collisions_of(&child).is_empty() {
                     continue;
                 }
-                let open = urdf.parent_joint(&child).map(|j| j.upper_limit).unwrap_or(0.0);
-                vertices.extend(urdf.child_vertices_in_parent(&child, open, meshes_dir)?.iter().map(|v| pose * v));
+                let joint = urdf.parent_joint(&child).expect("children_of implies a parent joint");
+                let travel = if joint.is_fixed() { vec![joint.lower_limit] } else { vec![joint.lower_limit, joint.upper_limit] };
+                for q in travel {
+                    vertices.extend(urdf.child_vertices_in_parent(&child, q, meshes_dir)?.iter().map(|v| pose * v));
+                }
             }
             out.push(wire_json(&name, decimate(&vertices)));
         }

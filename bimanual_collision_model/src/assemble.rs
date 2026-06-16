@@ -6,19 +6,14 @@ use std::collections::{HashMap, HashSet};
 
 use srs_model::nalgebra::Point3;
 
-use crate::fit::fit_capsules_adaptive;
+use crate::fit::fit_capsule;
 use crate::geometry::Capsule;
 use crate::urdf_collision::UrdfCollisions;
 
-/// Adaptive band search ceilings: compound fixed bodies (a torso) are worth
-/// many bands; limb links taper at most a little, and extra capsules cost
-/// pairwise checks.
-const MAX_BANDS_FIXED: usize = 8;
-const MAX_BANDS_LINK: usize = 3;
-
 /// Capsules for every collision body: world-fixed bodies (in root frame) and
 /// chain links (in link frame, with attached collision-bearing children
-/// baked in across their travel).
+/// baked in across their travel). Each body mesh fits one capsule; a link
+/// carries an extra capsule per attached child (a gripper finger).
 pub(crate) struct FittedBodies {
     pub fixed: Vec<(String, Vec<Capsule>)>,
     pub links: HashMap<String, Vec<Capsule>>,
@@ -38,7 +33,7 @@ pub(crate) fn fit_bodies(
     let mut links = HashMap::new();
     let mut attached: HashSet<String> = HashSet::new();
     for name in chains.iter().flatten() {
-        let mut capsules = fit_capsules_adaptive(&urdf.link_vertices(name, meshes_dir)?, MAX_BANDS_LINK)?;
+        let mut capsules = vec![fit_capsule(&urdf.link_vertices(name, meshes_dir)?)?];
         for child in urdf.children_of(name) {
             if chain_set.contains(child.as_str()) || urdf.collisions_of(&child).is_empty() {
                 continue;
@@ -57,7 +52,7 @@ pub(crate) fn fit_bodies(
         let vertices = urdf
             .fixed_vertices_in_root(&name, meshes_dir)
             .map_err(|e| format!("collision link '{name}' is neither a chain link, an attached child, nor world-fixed: {e}"))?;
-        fixed.push((name, fit_capsules_adaptive(&vertices, MAX_BANDS_FIXED)?));
+        fixed.push((name, vec![fit_capsule(&vertices)?]));
     }
 
     Ok(FittedBodies { fixed, links })
@@ -73,5 +68,5 @@ fn attached_child_capsule(urdf: &UrdfCollisions, child: &str, meshes_dir: &str) 
     if !joint.is_fixed() {
         vertices.extend(urdf.child_vertices_in_parent(child, joint.upper_limit, meshes_dir)?);
     }
-    Ok(fit_capsules_adaptive(&vertices, 1)?.remove(0))
+    fit_capsule(&vertices)
 }

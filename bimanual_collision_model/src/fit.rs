@@ -1,18 +1,37 @@
-//! Capsule fitting: the smallest-reasonable capsule containing a vertex
-//! cloud, run at model construction to turn each URDF collision mesh into
-//! its runtime proxy.
+//! Capsule fitting: one strictly-bounding capsule per collision mesh, run at
+//! model construction to turn each URDF mesh into its runtime proxy.
 //!
-//! Containment is exact by construction: the radius is the maximum distance
-//! of any vertex to the chosen axis segment, so every vertex (and therefore
-//! the convex hull of the mesh) lies inside the capsule. The fit is not the
-//! globally minimal capsule; PCA picks the axis and one shrink pass trades
-//! cap length against radius, which is tight enough for link-shaped meshes.
+//! A capsule is a line-swept sphere (LSS) fitted by the construction of Larsen,
+//! Gottschalk, Lin & Manocha, "Fast Proximity Queries with Swept Sphere
+//! Volumes" (UNC TR99-018; IEEE ICRA 2000, the basis of the PQP distance
+//! library): the axis is the dominant principal axis of the vertex covariance,
+//! the radius encloses every vertex projected onto the perpendicular plane, and
+//! the caps cover the axial extremes. Containment is exact and needs no repair
+//! step: the radius is the maximum distance of any vertex to the segment, so
+//! every vertex lies inside, and a capsule is convex, so every triangle face (a
+//! convex combination of its vertices) lies inside too. Capsule distance is
+//! therefore a true lower bound on mesh distance, and the model alarms early,
+//! never late.
+//!
+//! One capsule per link is the standard proxy for distance-based safety (Balan
+//! & Bone, "Safe human-robot interaction based on dynamic sphere-swept line
+//! bounding volumes", RCIM 26(5), 2010; the capsule proxies in MoveIt and
+//! HPP-FCL). It is loose on a compound shape (a forked elbow yoke, the torso),
+//! where one radius must span the whole girth, but the governor band and the
+//! reference-pose rebasing absorb that looseness: a link that rests inside a fat
+//! torso proxy reads the band's `d_safe`, not an alarm. Tightening a compound
+//! link with several primitives (medial-axis sphere sets, as in NVIDIA cuRobo,
+//! or per-segment capsules) is deferred; it would need a face-coverage pass,
+//! since a union of capsules is not convex and can leak a face between two of
+//! them. See the README's future-work note.
 
 use srs_model::nalgebra::{Matrix3, Point3, Vector3};
 
 use crate::geometry::{Capsule, point_segment_distance};
 
-/// Fit a capsule containing every point of `points`.
+/// Fit a single capsule (line-swept sphere) containing every point of
+/// `points`: principal axis, perpendicular enclosing radius, extremal caps
+/// (Larsen et al., see the module docs). Containment is exact.
 pub fn fit_capsule(points: &[Point3<f64>]) -> Result<Capsule, String> {
     if points.is_empty() {
         return Err("cannot fit a capsule to zero points".into());
@@ -67,126 +86,10 @@ pub fn fit_capsule(points: &[Point3<f64>]) -> Result<Capsule, String> {
         .expect("the minimum-radius candidate always survives its own tie window"))
 }
 
-/// Fit up to `max_bands` capsules: partition the cloud into equal-width
-/// slabs along its principal axis and fit each slab independently (each with
-/// its own axis), trying every band count from 1 to `max_bands` and keeping
-/// the one with the least total capsule volume.
-///
-/// Slab assignment is per point, and a capsule union is not convex, so a
-/// face spanning two bands could escape between them; when the input is a
-/// triangle soup (length a multiple of 3, as every STL path here produces),
-/// the repair pass grows leaking bands until sampled faces are contained
-/// too. A plain point cloud gets point containment only. Volume is the
-/// phantom space a proxy adds (the cause of false proximity), and it
-/// self-regularizes: every extra band brings its own end caps, so a uniform
-/// shape stays one capsule while tapered or compound shapes (a torso: wide
-/// base, slim column; an elbow link) band where it genuinely helps. More
-/// capsules also cost pairwise checks, so a higher count must earn a
-/// material (5%) volume reduction.
-pub fn fit_capsules_adaptive(points: &[Point3<f64>], max_bands: usize) -> Result<Vec<Capsule>, String> {
-    let single = fit_capsule(points)?;
-    let mut best = vec![single];
-    let mut best_volume = volume(&best);
-
-    let axis = principal_axis(points);
-    let ts: Vec<f64> = points.iter().map(|p| p.coords.dot(&axis)).collect();
-    let t_min = ts.iter().cloned().fold(f64::INFINITY, f64::min);
-    let t_max = ts.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    if t_max - t_min <= 0.0 {
-        return Ok(best);
-    }
-
-    for bands in 2..=max_bands.max(1) {
-        let width = (t_max - t_min) / bands as f64;
-        let slab_of = |t: f64| (((t - t_min) / width) as usize).min(bands - 1);
-        let mut slabs: Vec<Vec<Point3<f64>>> = vec![Vec::new(); bands];
-        for (p, t) in points.iter().zip(&ts) {
-            slabs[slab_of(*t)].push(*p);
-        }
-        let mut fitted = slabs
-            .iter()
-            .filter(|s| !s.is_empty())
-            .map(|s| fit_capsule(s))
-            .collect::<Result<Vec<_>, _>>()?;
-        repair_face_coverage(points, &mut fitted)?;
-        // Volume is scored after repair so candidates compete on what they
-        // actually cost once sound.
-        let v = volume(&fitted);
-        if v < best_volume * 0.95 {
-            best_volume = v;
-            best = fitted;
-        }
-    }
-    Ok(best)
-}
-
-/// Barycentric sample weights covering a triangle's interior and edges.
-const FACE_SAMPLES: [[f64; 3]; 12] = [
-    [0.5, 0.5, 0.0], [0.5, 0.0, 0.5], [0.0, 0.5, 0.5],
-    [0.75, 0.25, 0.0], [0.25, 0.75, 0.0], [0.75, 0.0, 0.25],
-    [0.25, 0.0, 0.75], [0.0, 0.75, 0.25], [0.0, 0.25, 0.75],
-    [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0], [0.5, 0.25, 0.25], [0.25, 0.5, 0.25],
-];
-
-/// Make a capsule union cover the FACES of a triangle soup, not only its
-/// vertices: a union is not convex, so a face spanning two bands can escape
-/// between them. Sample each face and grow the nearest band's radius by the
-/// worst escape, repeating until nothing escapes. Vertices are exact by
-/// construction, faces by sampled bound; the final containment tests sample
-/// independently. No-op for non-triangle clouds and single capsules.
-fn repair_face_coverage(points: &[Point3<f64>], capsules: &mut [Capsule]) -> Result<(), String> {
-    if !points.len().is_multiple_of(3) || capsules.len() < 2 {
-        return Ok(());
-    }
-    for _ in 0..8 {
-        let mut worst_escape = vec![0.0_f64; capsules.len()];
-        for tri in points.chunks_exact(3) {
-            // Convexity early-exit: a capsule containing all three vertices
-            // contains the whole face, no sampling needed. This is the
-            // common case for every triangle away from band boundaries.
-            if capsules.iter().any(|c| tri.iter().all(|v| c.contains(v))) {
-                continue;
-            }
-            for w in &FACE_SAMPLES {
-                let p = Point3::from(tri[0].coords * w[0] + tri[1].coords * w[1] + tri[2].coords * w[2]);
-                let (mut nearest, mut escape) = (0usize, f64::INFINITY);
-                for (i, c) in capsules.iter().enumerate() {
-                    let d = point_segment_distance(&p, &c.a, &c.b) - c.radius;
-                    if d < escape {
-                        escape = d;
-                        nearest = i;
-                    }
-                }
-                if escape > 0.0 {
-                    worst_escape[nearest] = worst_escape[nearest].max(escape);
-                }
-            }
-        }
-        if worst_escape.iter().all(|&e| e <= 0.0) {
-            return Ok(());
-        }
-        for (c, e) in capsules.iter_mut().zip(&worst_escape) {
-            c.radius += e + 1e-9;
-        }
-    }
-    Err("face coverage repair did not converge".into())
-}
-
-/// Total volume of a capsule set (overlaps double-counted: a proxy for the
-/// union, exact enough to rank band candidates).
-fn volume(capsules: &[Capsule]) -> f64 {
-    capsules
-        .iter()
-        .map(|c| {
-            let len = (c.b - c.a).norm();
-            std::f64::consts::PI * c.radius * c.radius * (len + 4.0 / 3.0 * c.radius)
-        })
-        .sum()
-}
-
 /// Dominant eigenvector of the point covariance: the direction of largest
-/// spread. The Z fallback guards a numerically degenerate eigenvector, not a
-/// reachable input class (a single point yields unit eigenvectors already).
+/// spread, used as the capsule axis. The Z fallback guards a numerically
+/// degenerate eigenvector (a single point yields unit eigenvectors already),
+/// not a reachable shape.
 fn principal_axis(points: &[Point3<f64>]) -> Vector3<f64> {
     let centroid = centroid(points);
     let cov = points.iter().fold(Matrix3::zeros(), |acc, p| {
@@ -195,8 +98,14 @@ fn principal_axis(points: &[Point3<f64>]) -> Vector3<f64> {
     }) / points.len() as f64;
 
     let eigen = cov.symmetric_eigen();
-    let axis = eigen.eigenvectors.column(eigen.eigenvalues.imax()).into_owned();
-    if axis.norm_squared() < 1e-12 { Vector3::z() } else { axis.normalize() }
+    let (dominant, _) = eigen
+        .eigenvalues
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.total_cmp(b.1))
+        .expect("a 3x3 covariance has three eigenvalues");
+    let v = eigen.eigenvectors.column(dominant).into_owned();
+    if v.norm_squared() < 1e-12 { Vector3::z() } else { v.normalize() }
 }
 
 fn centroid(points: &[Point3<f64>]) -> Vector3<f64> {
@@ -271,73 +180,6 @@ mod tests {
 
         assert!(fit_capsule(&[]).is_err());
         assert!(fit_capsule(&[Point3::new(f64::NAN, 0.0, 0.0)]).is_err());
-    }
-
-    #[test]
-    fn banded_union_contains_faces_spanning_band_boundaries() {
-        // Long thin triangles crossing the band boundary of a dumbbell: with
-        // per-point slabs their midspans can escape the union; per-triangle
-        // slabs must keep every sampled face point inside.
-        let mut pts = Vec::new();
-        for k in 0..24 {
-            let ang = k as f64 * std::f64::consts::TAU / 24.0;
-            let (c, s) = (ang.cos(), ang.sin());
-            // Wide-base ring vertex paired with two slim far-column vertices.
-            pts.push(Point3::new(0.5 * c, 0.5 * s, 0.0));
-            pts.push(Point3::new(0.05 * c, 0.05 * s, 2.9));
-            pts.push(Point3::new(0.05 * s, 0.05 * c, 3.0));
-        }
-        let banded = fit_capsules_adaptive(&pts, 5).expect("banded");
-        for tri in pts.chunks_exact(3) {
-            for (w0, w1, w2) in [(0.5, 0.5, 0.0), (0.5, 0.0, 0.5), (0.0, 0.5, 0.5), (1. / 3., 1. / 3., 1. / 3.)] {
-                let p = Point3::from(tri[0].coords * w0 + tri[1].coords * w1 + tri[2].coords * w2);
-                let inside =
-                    banded.iter().any(|c| point_segment_distance(&p, &c.a, &c.b) <= c.radius + 1e-9);
-                assert!(inside, "face point {p:?} escapes the banded union");
-            }
-        }
-    }
-
-    #[test]
-    fn adaptive_fit_bands_a_dumbbell_and_contains_it() {
-        // A slim column with a wide base: one capsule needs the base radius
-        // everywhere, bands give the column its own slim capsule.
-        let mut pts = Vec::new();
-        for i in 0..200 {
-            let z = i as f64 / 199.0;
-            let r = if z < 0.2 { 0.5 } else { 0.05 };
-            for k in 0..8 {
-                let ang = k as f64 * std::f64::consts::TAU / 8.0;
-                pts.push(Point3::new(r * ang.cos(), r * ang.sin(), z * 3.0));
-            }
-        }
-        let banded = fit_capsules_adaptive(&pts, 5).expect("banded");
-        assert!(banded.len() >= 2, "dumbbell should band, got {} capsule(s)", banded.len());
-        for p in &pts {
-            let inside = banded.iter().any(|c| point_segment_distance(p, &c.a, &c.b) <= c.radius + 1e-9);
-            assert!(inside, "point {p:?} escapes the banded union");
-        }
-        let slimmest = banded.iter().map(|c| c.radius).fold(f64::INFINITY, f64::min);
-        assert!(slimmest < 0.2, "no slim column band: {slimmest}");
-    }
-
-    #[test]
-    fn adaptive_fit_keeps_one_capsule_when_banding_does_not_help() {
-        // A plain cylinder: every band count gives the same radius, so the
-        // adaptive choice must keep the single capsule.
-        let cloud = cylinder_cloud(Point3::new(0., 0., 0.), Point3::new(2., 0., 0.), 0.1);
-        let fitted = fit_capsules_adaptive(&cloud, 4).expect("fit");
-        assert_eq!(fitted.len(), 1, "cylinder must not band");
-        let single = fit_capsule(&cloud).expect("single");
-        assert_eq!(fitted[0], single);
-    }
-
-    #[test]
-    fn adaptive_fit_with_max_one_matches_single() {
-        let pts: Vec<_> = (0..50).map(|i| Point3::new(i as f64 * 0.01, 0.0, 0.0)).collect();
-        let single = fit_capsule(&pts).expect("single");
-        let banded = fit_capsules_adaptive(&pts, 1).expect("banded");
-        assert_eq!(banded, vec![single]);
     }
 
     #[test]

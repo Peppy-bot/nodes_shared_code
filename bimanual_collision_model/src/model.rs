@@ -385,11 +385,6 @@ impl BimanualCollisionModel {
         Ok(self.min_distance(q_left, q_right)?.distance <= threshold)
     }
 
-    /// Names of all bodies, in checking order (for diagnostics and tools).
-    pub fn body_names(&self) -> Vec<&str> {
-        self.bodies.iter().map(|b| b.name.as_str()).collect()
-    }
-
     /// World capsules of every body at the given configuration, paired with
     /// the body name (for visualization tools; runtime queries use
     /// [`min_distance`](Self::min_distance)).
@@ -585,7 +580,7 @@ mod tests {
     #[test]
     fn multi_capsule_bodies_take_part_in_the_minimum() {
         // Wrists wrapped toward each other: the winning bodies carry several
-        // capsules (wrist bands + fingers), exercising the inner loops.
+        // capsules (a wrist and its two fingers), exercising the inner loops.
         let mut m = BimanualCollisionModel::new(URDF, MESHES, "openarm_left_link0", "openarm_right_link0", &policy())
             .expect("model");
         let ql = [0.0, 0.0, 1.2, 0.4, 0.0, 0.0, 0.0];

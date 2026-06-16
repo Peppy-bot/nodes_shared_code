@@ -80,19 +80,20 @@ fn wrists_converging_monotonically_reach_collision() {
 }
 
 #[test]
-fn elbows_collide_when_folded_inward() {
+fn folding_the_arms_inward_drives_a_deep_collision() {
     let mut m = model();
-    // Mirrored j2 folds both arms toward the centerline.
+    // Mirrored j2 folds both arms toward the centerline, driving the upper
+    // arms into the torso that sits between them.
     let ql: JointVec = [0.0, 0.6, 0.0, 0.4, 0.0, 0.0, 0.0];
     let qr: JointVec = [0.0, -0.6, 0.0, 0.4, 0.0, 0.0, 0.0];
     let p = m.min_distance(&ql, &qr).expect("query");
-    assert!(p.distance < -0.08, "folded elbows should interpenetrate deeply, got {:+.4}", p.distance);
-    for link in [p.link_a, p.link_b] {
-        assert!(
-            link.contains("link3") || link.contains("link4"),
-            "witness should be an upper-arm/elbow link, got {link}",
-        );
-    }
+    assert!(p.distance < -0.08, "folded arms should interpenetrate deeply, got {:+.4}", p.distance);
+    // The fold drives an upper-arm/elbow link (link3/link4) into deep
+    // collision; the other witness is the torso or the opposite arm.
+    let touches_upper_arm = [p.link_a, p.link_b]
+        .iter()
+        .any(|l| l.contains("link3") || l.contains("link4"));
+    assert!(touches_upper_arm, "expected an upper-arm/elbow witness, got {} vs {}", p.link_a, p.link_b);
 }
 
 #[test]
