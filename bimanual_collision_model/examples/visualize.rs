@@ -2,7 +2,7 @@
 //! configuration into a self-contained interactive HTML scene.
 //!
 //! ```sh
-//! cargo run --release --bin visualize -- \
+//! cargo run --release --example visualize -- \
 //!     --urdf tests/fixtures/openarm_v10.urdf --meshes tests/fixtures/meshes \
 //!     --left-base openarm_left_link0 --right-base openarm_right_link0 \
 //!     --left 0,0,1.2,0.4,0,0,0 --right 0,0,-1.2,0.4,0,0,0 --wireframes -o scene.html
@@ -21,8 +21,11 @@ use std::collections::HashSet;
 
 use bimanual_collision_model::nalgebra::{Point3, Vector3};
 use bimanual_collision_model::urdf_collision::UrdfCollisions;
-use bimanual_collision_model::{BimanualCollisionModel, PlacedPiece};
+use bimanual_collision_model::{BimanualCollisionModel, PairSpec, PlacedPiece};
 use srs_model::{ARM_DOF, Arm, JointVec};
+
+#[path = "../tests/fixtures/openarm.rs"]
+mod openarm;
 
 /// Wireframes are decimated to about this many triangles per body.
 const MAX_WIRE_TRIS: usize = 2000;
@@ -45,6 +48,7 @@ struct Args {
     wireframes: bool,
     d_stop: f64,
     d_safe: f64,
+    exclude: Vec<PairSpec>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -59,6 +63,7 @@ fn parse_args() -> Result<Args, String> {
         wireframes: false,
         d_stop: 0.01,
         d_safe: 0.03,
+        exclude: Vec::new(),
     };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -74,6 +79,11 @@ fn parse_args() -> Result<Args, String> {
             "--wireframes" | "-w" => args.wireframes = true,
             "--d-stop" => args.d_stop = value()?.parse().map_err(|e| format!("{e}"))?,
             "--d-safe" => args.d_safe = value()?.parse().map_err(|e| format!("{e}"))?,
+            "--exclude" | "-x" => {
+                let v = value()?;
+                let (a, b) = v.split_once(',').ok_or(format!("--exclude wants 'link_a,link_b', got '{v}'"))?;
+                args.exclude.push(PairSpec::new(a.trim(), b.trim()));
+            }
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
@@ -92,7 +102,14 @@ fn run() -> Result<(), String> {
     let args = parse_args()?;
     // The model is a pure distance oracle; the HUD colours by the caller's own
     // d_stop/d_safe (the --d-stop / --d-safe args), independent of any band.
-    let mut model = BimanualCollisionModel::from_urdf_file(&args.urdf, &args.meshes, &args.left_base, &args.right_base, &[])?;
+    // Supply the tight torso proxy we ship whenever this is the OpenArm robot,
+    // so the scene shows the real fit; any other URDF falls through to auto-fit.
+    let mut builder = BimanualCollisionModel::builder_from_file(&args.urdf, &args.meshes, &args.left_base, &args.right_base)?
+        .exclude(&args.exclude);
+    if UrdfCollisions::from_file(&args.urdf)?.collision_link_names().iter().any(|n| n == openarm::TORSO_BODY) {
+        builder = builder.hulls(openarm::TORSO_BODY, openarm::torso());
+    }
+    let mut model = builder.build()?;
 
     let proximity = model.min_distance(&args.left, &args.right)?;
     let (distance, witness) = (proximity.distance, [point_json(&proximity.on_a), point_json(&proximity.on_b)]);

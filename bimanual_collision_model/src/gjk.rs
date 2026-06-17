@@ -77,13 +77,15 @@ pub struct Hull {
 }
 
 /// Result of a GJK query: signed surface distance (negative is penetration of
-/// the rounded shapes), the closest point on each surface, and the iteration
-/// count for profiling.
+/// the rounded shapes) and the closest point on each surface.
 #[derive(Debug, Clone)]
 pub struct GjkDistance {
     pub distance: f64,
     pub on_a: Point3<f64>,
     pub on_b: Point3<f64>,
+    /// Iterations the support walk took to converge. Read only by the tests that
+    /// pin warm-start efficiency; production consumes just the geometry above.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub iterations: u32,
 }
 

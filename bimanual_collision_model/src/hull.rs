@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use srs_model::nalgebra::{Matrix3, Point3, Vector3};
+use srs_model::nalgebra::{Point3, Vector3};
 
 /// A point in front of a face by more than this (metres) sees it. At 1e-9 a
 /// point is classified inside only when it is inside to within a nanometre, far
@@ -139,111 +139,38 @@ fn max_protrusion(hull: &ConvexHull, points: &[Point3<f64>]) -> f64 {
         .fold(0.0, f64::max)
 }
 
-/// The best split found for a decomposition step: which piece to replace, the
-/// two triangle soups it splits into, and the total enclosed-volume the split
-/// removes (the objective being maximized).
-struct Split {
-    piece: usize,
-    lo: Vec<Point3<f64>>,
-    hi: Vec<Point3<f64>>,
-    gain: f64,
+/// A convex collision piece a caller supplies for a body in place of the
+/// auto-fit hull: the convex hull of its points is taken as the piece. A body's
+/// supplied pieces must together contain that body's mesh, which is checked at
+/// build time. [`aabb`](Self::aabb) gives the eight corners of an axis-aligned
+/// box, usually all a blocky concave body like a torso needs.
+#[derive(Clone, Debug)]
+pub struct ConvexPiece {
+    points: Vec<Point3<f64>>,
 }
 
-/// Greedily decompose a triangle soup into up to `max_pieces` simplified hulls,
-/// each split chosen to shrink total enclosed volume the most, stopping early
-/// when no split cuts at least `min_gain` cubic metres off the total. An
-/// absolute threshold (not a fraction of the body) lets a big concave body (the
-/// torso) keep splitting while a small one (a gripper finger pair) stays whole,
-/// since the same shape saves far less absolute volume when it is small. Cuts
-/// are planes swept along each piece's principal axes, not fixed slabs, and
-/// every whole triangle lands in one piece, so the union of the per-piece hulls
-/// contains the mesh with no face escape. `points` is a triangle soup.
-///
-/// Errors rather than silently dropping a piece that cannot be hulled: a body
-/// must never be left without a proxy.
-pub fn decompose(points: &[Point3<f64>], cell: f64, max_pieces: usize, min_gain: f64) -> Result<Vec<RoundedHull>, String> {
-    debug_assert_eq!(points.len() % 3, 0, "decompose expects a triangle soup");
-    // Volume of a piece's simplified hull; a piece that cannot hull (degenerate)
-    // reports infinite volume so a split that produces it is never chosen.
-    let volume = |tris: &[Point3<f64>]| simplified_hull(tris, cell).map_or(f64::INFINITY, |rh| hull_volume(&rh.hull));
-    let mut pieces = vec![points.to_vec()];
+impl ConvexPiece {
+    /// A piece spanning the convex hull of `points`.
+    pub fn from_points(points: Vec<Point3<f64>>) -> ConvexPiece {
+        ConvexPiece { points }
+    }
 
-    while pieces.len() < max_pieces && volume(&pieces[0]).is_finite() {
-        let mut best: Option<Split> = None;
-        for (i, piece) in pieces.iter().enumerate() {
-            let piece_volume = volume(piece);
-            for axis in principal_axes(piece) {
-                let projected: Vec<f64> = piece.chunks_exact(3).map(|t| triangle_centroid(t).dot(&axis)).collect();
-                let lo = projected.iter().copied().fold(f64::INFINITY, f64::min);
-                let hi = projected.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                for k in 1..4 {
-                    let (a, b) = split_triangles(piece, &axis, lo + (hi - lo) * k as f64 / 4.0);
-                    if a.len() < 12 || b.len() < 12 {
-                        continue;
-                    }
-                    let gain = piece_volume - volume(&a) - volume(&b);
-                    if best.as_ref().is_none_or(|s| gain > s.gain) {
-                        best = Some(Split { piece: i, lo: a, hi: b, gain });
-                    }
+    /// The axis-aligned box between `min` and `max`, as its eight corners.
+    pub fn aabb(min: Point3<f64>, max: Point3<f64>) -> ConvexPiece {
+        let mut points = Vec::with_capacity(8);
+        for x in [min.x, max.x] {
+            for y in [min.y, max.y] {
+                for z in [min.z, max.z] {
+                    points.push(Point3::new(x, y, z));
                 }
             }
         }
-        match best {
-            Some(s) if s.gain > min_gain => {
-                pieces[s.piece] = s.lo;
-                pieces.push(s.hi);
-            }
-            _ => break,
-        }
+        ConvexPiece { points }
     }
-    pieces.iter().map(|p| simplified_hull(p, cell)).collect()
-}
 
-/// Volume enclosed by a convex hull (divergence theorem over its faces; the
-/// outward sense is fixed by the vertex centroid, so winding need not agree).
-fn hull_volume(hull: &ConvexHull) -> f64 {
-    let interior = Point3::from(hull.vertices.iter().fold(Vector3::zeros(), |a, v| a + v.coords) / hull.vertices.len() as f64);
-    let total: f64 = hull
-        .faces
-        .iter()
-        .map(|f| {
-            let (a, b, c) = (hull.vertices[f[0]], hull.vertices[f[1]], hull.vertices[f[2]]);
-            let mut cross = (b - a).cross(&(c - a));
-            if cross.dot(&(interior - a)) > 0.0 {
-                cross = -cross;
-            }
-            ((a.coords + b.coords + c.coords) / 3.0).dot(&cross)
-        })
-        .sum();
-    total.abs() / 6.0
-}
-
-/// The three principal axes of `points` (covariance eigenvectors, any order).
-fn principal_axes(points: &[Point3<f64>]) -> [Vector3<f64>; 3] {
-    let centroid = points.iter().fold(Vector3::zeros(), |a, p| a + p.coords) / points.len() as f64;
-    let cov = points.iter().fold(Matrix3::zeros(), |m, p| {
-        let d = p.coords - centroid;
-        m + d * d.transpose()
-    }) / points.len() as f64;
-    let eigen = cov.symmetric_eigen();
-    [0, 1, 2].map(|i| {
-        let v = eigen.eigenvectors.column(i).into_owned();
-        if v.norm_squared() < 1e-12 { Vector3::z() } else { v.normalize() }
-    })
-}
-
-fn triangle_centroid(t: &[Point3<f64>]) -> Vector3<f64> {
-    (t[0].coords + t[1].coords + t[2].coords) / 3.0
-}
-
-/// Partition a triangle soup by the plane `axis . x = offset`, assigning each
-/// whole triangle by its centroid so each side's hull covers its triangles.
-fn split_triangles(tris: &[Point3<f64>], axis: &Vector3<f64>, offset: f64) -> (Vec<Point3<f64>>, Vec<Point3<f64>>) {
-    let (mut lo, mut hi) = (Vec::new(), Vec::new());
-    for t in tris.chunks_exact(3) {
-        if triangle_centroid(t).dot(axis) <= offset { &mut lo } else { &mut hi }.extend_from_slice(t);
+    pub(crate) fn points(&self) -> &[Point3<f64>] {
+        &self.points
     }
-    (lo, hi)
 }
 
 /// Incremental hull with a tunable visibility tolerance: a point in front of a
@@ -583,41 +510,12 @@ mod tests {
     }
 
     #[test]
-    fn decompose_splits_a_two_lobe_shape_and_contains_it() {
-        use rand::{Rng, SeedableRng};
-        // Two separated clusters: one hull bridges them (huge volume), so the
-        // best split separates the lobes and the union still covers every point.
-        let mut rng = rand::rngs::StdRng::seed_from_u64(13);
-        let mut soup = Vec::new();
-        for cz in [0.0, 5.0] {
-            for _ in 0..24 {
-                soup.push(pt(rng.gen_range(-0.5..0.5), rng.gen_range(-0.5..0.5), cz + rng.gen_range(-0.5..0.5)));
-            }
-        }
-        let single_vol = hull_volume(&convex_hull(&soup).expect("single hull"));
-        let pieces = decompose(&soup, 0.05, 2, 0.1).expect("decompose");
-        assert_eq!(pieces.len(), 2, "two separated lobes should split into two");
-        let pieces_vol: f64 = pieces.iter().map(|rh| hull_volume(&rh.hull)).sum();
-        assert!(pieces_vol < 0.6 * single_vol, "splitting must cut volume: {pieces_vol} vs {single_vol}");
-        for p in &soup {
-            let covered = pieces.iter().any(|rh| {
-                let h = &rh.hull;
-                let interior = Point3::from(h.vertices.iter().fold(Vector3::zeros(), |s, v| s + v.coords) / h.vertices.len() as f64);
-                let protrusion = h
-                    .faces
-                    .iter()
-                    .map(|f| {
-                        let (a, b, c) = (h.vertices[f[0]], h.vertices[f[1]], h.vertices[f[2]]);
-                        let mut n = (b - a).cross(&(c - a)).normalize();
-                        if n.dot(&(interior - a)) > 0.0 {
-                            n = -n;
-                        }
-                        n.dot(&(p - a))
-                    })
-                    .fold(f64::NEG_INFINITY, f64::max);
-                protrusion <= rh.radius + 1e-9
-            });
-            assert!(covered, "a point escaped every piece");
+    fn aabb_piece_has_the_eight_box_corners() {
+        let piece = ConvexPiece::aabb(pt(-1.0, -2.0, -3.0), pt(1.0, 2.0, 3.0));
+        let hull = convex_hull(piece.points()).expect("box hull");
+        assert_eq!(hull.vertices.len(), 8, "a box has eight hull vertices");
+        for c in piece.points() {
+            assert!(hull.vertices.iter().any(|v| (v - c).norm() < 1e-12), "corner {c:?} missing");
         }
     }
 }

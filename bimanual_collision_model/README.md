@@ -37,32 +37,38 @@ use bimanual_collision_model::GovernorBand;
 let band = GovernorBand::new(0.01, 0.03)?;
 ```
 
-On the OpenArm fixture, with the spurious base-link vs upper-arm pair excluded
-(see below), the closest checked pair at the rest pose is the gripper against
-the torso, about 29 mm apart as reported. A 30 mm `d_safe` therefore leaves the
-rest pose just at the edge of the band (so it runs near full speed there) while
-still throttling the genuine close approaches the arms can reach elsewhere. The
-two numbers are the caller's to tune for their robot and controller.
+On the OpenArm fixture, the closest pair at the rest pose is each arm's base
+link against its own forearm (`link0` vs `link3`), about 24 mm apart. That pair
+is kinematically blocked from real contact, so the caller excludes it (see
+below); with it gone, the closest checked pair at rest is the forearm against
+the torso, about 34 mm apart. A 30 mm `d_safe` therefore runs the rest pose at
+full speed while still throttling the genuine close approaches the arms reach
+elsewhere. The two numbers are the caller's to tune for their robot and
+controller.
 
 ## Quick start
 
 ```rust
-use bimanual_collision_model::{BimanualCollisionModel, GovernorBand, PairSpec};
+use bimanual_collision_model::nalgebra::Point3;
+use bimanual_collision_model::{BimanualCollisionModel, ConvexPiece, GovernorBand, PairSpec};
 
 // The proximity law the caller gates with. The model does not hold it: the
 // model reports distance, the caller decides what to do with it.
 let band = GovernorBand::new(0.01, 0.03)?;
 
-// Pairs the caller knows can never collide, dropped from checking (see below).
-let exclude = [PairSpec::new("left_base_link", "left_link3")];
+// Tight boxes for a concave body, each verified at build to contain its mesh.
+// Axis-aligned here; `ConvexPiece::from_points` takes any convex point cloud.
+let torso_boxes = vec![
+    ConvexPiece::aabb(Point3::new(-0.157, -0.097, -0.002), Point3::new(0.097, 0.097, 0.022)),
+    // ... flare, column, head (see examples/visualize.rs for the full set)
+];
 
-let mut model = BimanualCollisionModel::from_urdf_file(
-    &urdf_path,
-    &meshes_dir,
-    &left_base,
-    &right_base,
-    &exclude,
-)?;
+let mut model = BimanualCollisionModel::builder_from_file(&urdf_path, &meshes_dir, &left_base, &right_base)?
+    // Pairs the caller knows can never collide, dropped from checking (see below).
+    .exclude(&[PairSpec::new("openarm_left_link0", "openarm_left_link3")])
+    // A tight proxy for a concave body, replacing its single auto-fit hull.
+    .hulls("openarm_body_link0", torso_boxes)
+    .build()?;
 
 // Watchdog: evaluate the live joint states of both arms.
 let p = model.min_distance(&q_left, &q_right)?;
@@ -79,9 +85,10 @@ let allowed_fraction = band.scale(d_now, d_next);
 
 ## Convex hulls, GJK, and the conservative fit
 
-Each collision mesh is wrapped at construction in a small set of convex hulls
-decomposed from it. Most links become a single hull; a concave body such as the
-torso splits into a few. At runtime the only geometry is Gilbert-Johnson-Keerthi
+Each collision mesh is wrapped at construction in a convex hull. Every body
+auto-fits to a single hull; for a concave body whose one hull would bulge too
+far (the torso), the caller supplies a few tight convex pieces instead, verified
+at build to contain the mesh. At runtime the only geometry is Gilbert-Johnson-Keerthi
 distance between hulls, with the Expanding Polytope Algorithm recovering the
 penetration depth and direction where two hulls overlap. The signed distance is
 therefore continuous through contact: it falls smoothly through zero rather than
@@ -346,13 +353,12 @@ fixed bodies are currently baked in the world frame.
   list rather than proving it.
 - **Moving mounts.** A lift or torso axis would need the currently world-fixed
   bodies posed from a configuration like the arms, rather than baked once.
-- **Tighter or caller-supplied hulls.** A concave body like the torso is wrapped
-  in a few convex pieces, and convex pieces bulge outward where the real shape is
-  concave, so an arm can read closer to the torso than it truly is (this is what
-  pulls the torso-vs-arm clearance down at rest). Two ways to tighten it: a better
-  concave decomposition, or letting the caller supply hand-authored hulls for
-  chosen bodies. The latter subsumes the decomposition question and fits the
-  existing `Support` design, and would skip the fit step for those bodies.
+- **Automatic concave decomposition.** A concave body is handled today by the
+  caller supplying tight convex pieces (`Builder::hulls`), verified at build to
+  contain the mesh. That is exact but manual. Deriving those pieces automatically
+  from the mesh (an approximate convex decomposition, each part then strictly
+  bounded) would remove the hand-authoring step while keeping the containment
+  guarantee.
 - **Other robot topologies.** The "bimanual" and "SRS" assumptions are confined
   to `model.rs`: the two `srs_model::Arm` instances, the `q_left`/`q_right` query,
   the forward-kinematics source, and the same-side and cross-arm pair rules. The

@@ -7,25 +7,32 @@
 use bimanual_collision_model::{BimanualCollisionModel, GovernorBand};
 use srs_model::JointVec;
 
+#[path = "fixtures/openarm.rs"]
+mod openarm;
+
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
 /// In-limit home: the elbow's one-sided lower limit is 0.05.
 const HOME: JointVec = [0.0, 0.0, 0.0, 0.05, 0.0, 0.0, 0.0];
 
-/// The band the governor-law tests gate with; `d_safe` 20 mm sits just above the
-/// rest-pose clearance (closest pair ~33 mm), as a deployment would size it.
+/// The band the governor-halt test gates with.
 fn band() -> GovernorBand {
     GovernorBand::new(0.005, 0.02).expect("valid band")
 }
 
+/// The fixture model under the tight torso boxes we actually ship; the auto-fit
+/// torso hull bulges across the chest and clips the grippers at rest, so the
+/// integration scenarios run against the supplied proxy instead.
 fn model() -> BimanualCollisionModel {
-    BimanualCollisionModel::from_urdf_file(
+    BimanualCollisionModel::builder_from_file(
         &format!("{FIXTURES}/openarm_v10.urdf"),
         &format!("{FIXTURES}/meshes"),
         "openarm_left_link0",
         "openarm_right_link0",
-        &[],
     )
+    .expect("read fixture urdf")
+    .hulls(openarm::TORSO_BODY, openarm::torso())
+    .build()
     .expect("fixture model")
 }
 
@@ -36,13 +43,6 @@ fn wrists_inward(t: f64) -> (JointVec, JointVec) {
     ql[2] = t;
     qr[2] = -t;
     (ql, qr)
-}
-
-#[test]
-fn home_clears_the_band_floor() {
-    let mut m = model();
-    let p = m.min_distance(&HOME, &HOME).expect("clear pose");
-    assert!(p.distance >= band().d_safe() - 1e-9, "home should clear d_safe, got {:+.4} ({} vs {})", p.distance, p.link_a, p.link_b);
 }
 
 #[test]
@@ -75,12 +75,22 @@ fn folding_the_arms_inward_drives_a_collision() {
 }
 
 #[test]
+fn rest_pose_clears_d_safe() {
+    // The auto-fit torso bulges a phantom slab that reads a false near-contact
+    // against the grippers at rest; the tight shipped boxes leave the true
+    // clearance of several centimetres, well clear of the band.
+    let mut m = model();
+    let p = m.min_distance(&HOME, &HOME).expect("query");
+    assert!(p.distance > band().d_safe(), "rest min {:+.4} should clear d_safe", p.distance);
+}
+
+#[test]
 fn separating_sweep_never_alarms() {
     let mut m = model();
     for i in 0..=12 {
         let t = i as f64 * 0.1;
         let p = m.min_distance(&[0.0, -t, 0.0, 0.4, 0.0, 0.0, 0.0], &[0.0, t, 0.0, 0.4, 0.0, 0.0, 0.0]).expect("query");
-        assert!(p.distance > band().d_safe() - 0.005, "outward sweep dipped to {:+.4} at t={t}", p.distance);
+        assert!(p.distance > band().d_safe(), "outward sweep dipped to {:+.4} at t={t}", p.distance);
     }
 }
 

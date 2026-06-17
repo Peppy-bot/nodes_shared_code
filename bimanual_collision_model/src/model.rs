@@ -21,6 +21,7 @@ use srs_model::{ARM_DOF, Arm, JointVec};
 
 use crate::assemble::fit_bodies;
 use crate::gjk::{self, Hull, Placed};
+use crate::hull::ConvexPiece;
 use crate::pairs::PairSpec;
 use crate::urdf_collision::UrdfCollisions;
 
@@ -112,51 +113,64 @@ pub struct BimanualCollisionModel {
     right: Arm,
     bodies: Vec<Body>,
     pairs: Vec<Pair>,
-    /// Pairs dropped by the `exclude` argument to [`new`](Self::new), kept for
-    /// the caller to report.
+    /// Pairs dropped by [`Builder::exclude`], kept for the caller to report.
     excluded: Vec<(String, String)>,
     /// Per-body world pose, refreshed by [`place`](Self::place). Fixed bodies
     /// keep the identity (their hulls are already in world frame).
     world_iso: Vec<Isometry3<f64>>,
 }
 
-impl BimanualCollisionModel {
-    /// Build from the URDF (both chains) and its collision meshes, fitting the
-    /// hulls and deriving the checked pairs at construction; there is no
-    /// intermediate artifact to go stale. The model is a pure distance oracle:
-    /// it reports clearances, and the caller decides what to do with them (see
-    /// [`GovernorBand`](crate::GovernorBand) for the proximity law).
-    ///
-    /// `exclude` names pairs the caller asserts can never collide (a base link
-    /// and a link a few joints down, say); they are dropped from the checked set.
-    /// The assertion is trusted, not re-derived, so it is the caller's
-    /// responsibility to get right: excluding a pair that can in fact collide
-    /// silently removes that protection. The names must resolve to real bodies.
-    /// The dropped pairs are reported by [`excluded_pairs`](Self::excluded_pairs).
-    pub fn new(
-        urdf: &str,
-        meshes_dir: &str,
-        left_base: &str,
-        right_base: &str,
-        exclude: &[PairSpec],
-    ) -> Result<Self, String> {
+/// Configures and builds a [`BimanualCollisionModel`]; start from
+/// [`BimanualCollisionModel::builder`].
+pub struct Builder {
+    urdf: String,
+    meshes_dir: String,
+    left_base: String,
+    right_base: String,
+    exclude: Vec<PairSpec>,
+    supplied: HashMap<String, Vec<ConvexPiece>>,
+}
+
+impl Builder {
+    /// Drop these pairs from checking. The caller asserts they can never collide;
+    /// the assertion is trusted, not re-derived, so excluding a pair that can in
+    /// fact collide silently removes that protection. The names must resolve to
+    /// real bodies. Dropped pairs are reported by
+    /// [`excluded_pairs`](BimanualCollisionModel::excluded_pairs).
+    pub fn exclude(mut self, pairs: &[PairSpec]) -> Self {
+        self.exclude.extend_from_slice(pairs);
+        self
+    }
+
+    /// Supply convex pieces for a body, replacing its auto-fit hull. The pieces
+    /// must together contain the body's mesh, checked at build. This is how to
+    /// give a concave body (a torso) a tight proxy that a single convex hull
+    /// cannot. Naming a body that does not exist errors at build.
+    pub fn hulls(mut self, body: &str, pieces: Vec<ConvexPiece>) -> Self {
+        self.supplied.insert(body.to_string(), pieces);
+        self
+    }
+
+    /// Fit the bodies (supplied pieces override the auto-fit), derive the checked
+    /// pairs from the structural rules, and apply the exclusions.
+    pub fn build(self) -> Result<BimanualCollisionModel, String> {
+        let mut model = BimanualCollisionModel::assemble(&self.urdf, &self.meshes_dir, &self.left_base, &self.right_base, &self.supplied)?;
         // Candidate pairs: everything that can inform. Excluded structurally:
-        // two world-fixed bodies (their distance never changes), and pairs
-        // within two moving joints of each other, same-side or torso against a
-        // chain's first links. Those are joint-yoked: shoulder or wrist cluster
-        // members orbit each other through their whole range, so their distance
-        // swings with every legitimate motion while real contact between them
-        // is blocked by the link in between. Cross-arm pairs are always checked.
-        let mut probe = Self::with_pairs(urdf, meshes_dir, left_base, right_base, &[])?;
-        let lineage: Vec<(String, Lineage)> = probe
+        // two world-fixed bodies (their distance never changes), and pairs within
+        // two moving joints of each other, same-side or torso against a chain's
+        // first links. Those are joint-yoked: shoulder or wrist cluster members
+        // orbit each other through their whole range, so their distance swings
+        // with every legitimate motion while real contact between them is blocked
+        // by the link in between. Cross-arm pairs are always checked.
+        let lineage: Vec<(String, Lineage)> = model
             .bodies
             .iter()
             .map(|b| {
                 let lineage = match b.placement {
                     Placement::Left(i) => Lineage::Side(0, i + 1),
                     Placement::Right(i) => Lineage::Side(1, i + 1),
-                    Placement::Fixed if b.name == left_base => Lineage::Side(0, 0),
-                    Placement::Fixed if b.name == right_base => Lineage::Side(1, 0),
+                    Placement::Fixed if b.name == self.left_base => Lineage::Side(0, 0),
+                    Placement::Fixed if b.name == self.right_base => Lineage::Side(1, 0),
                     Placement::Fixed => Lineage::Torso,
                 };
                 (b.name.clone(), lineage)
@@ -179,15 +193,48 @@ impl BimanualCollisionModel {
                 }
             }
         }
-        probe.set_pairs(&specs)?;
-        probe.exclude_named(exclude)?;
-        Ok(probe)
+        model.set_pairs(&specs)?;
+        model.exclude_named(&self.exclude)?;
+        Ok(model)
+    }
+}
+
+impl BimanualCollisionModel {
+    /// Start building a model from a URDF string and its collision mesh
+    /// directory, naming the two chain base links. See [`Builder`]. The model is
+    /// a pure distance oracle: it reports clearances, and the caller decides what
+    /// to do with them (see [`GovernorBand`](crate::GovernorBand)).
+    pub fn builder(urdf: &str, meshes_dir: &str, left_base: &str, right_base: &str) -> Builder {
+        Builder {
+            urdf: urdf.to_string(),
+            meshes_dir: meshes_dir.to_string(),
+            left_base: left_base.to_string(),
+            right_base: right_base.to_string(),
+            exclude: Vec::new(),
+            supplied: HashMap::new(),
+        }
     }
 
-    /// Like [`new`](Self::new) but checking an explicit pair list and skipping
-    /// the structural derivation (tests and special-purpose tools). An empty list
-    /// builds the bodies with no checked pairs.
-    pub fn with_pairs(urdf: &str, meshes_dir: &str, left_base: &str, right_base: &str, pair_specs: &[PairSpec]) -> Result<Self, String> {
+    /// Like [`builder`](Self::builder) but reading the URDF from a file.
+    pub fn builder_from_file(path: &str, meshes_dir: &str, left_base: &str, right_base: &str) -> Result<Builder, String> {
+        let urdf = std::fs::read_to_string(path).map_err(|e| format!("read urdf '{path}': {e}"))?;
+        Ok(Self::builder(&urdf, meshes_dir, left_base, right_base))
+    }
+
+    /// Build the bodies with an explicit checked-pair list and no structural
+    /// derivation, bypassing the safety-relevant pair rules. Test-only: the
+    /// public path is [`builder`](Self::builder). An empty list builds the
+    /// bodies with no checked pairs.
+    #[cfg(test)]
+    fn with_pairs(urdf: &str, meshes_dir: &str, left_base: &str, right_base: &str, pair_specs: &[PairSpec]) -> Result<Self, String> {
+        let mut model = Self::assemble(urdf, meshes_dir, left_base, right_base, &HashMap::new())?;
+        model.set_pairs(pair_specs)?;
+        Ok(model)
+    }
+
+    /// Fit every collision body (supplied pieces override the auto-fit) and place
+    /// them, with no checked pairs set yet.
+    fn assemble(urdf: &str, meshes_dir: &str, left_base: &str, right_base: &str, supplied: &HashMap<String, Vec<ConvexPiece>>) -> Result<Self, String> {
         if left_base == right_base {
             return Err(format!("left and right base links are both '{left_base}'; a bimanual model needs two chains"));
         }
@@ -203,7 +250,7 @@ impl BimanualCollisionModel {
         let right_names = chain_names(&mut right);
 
         let parsed = UrdfCollisions::from_urdf(urdf)?;
-        let fitted = fit_bodies(&parsed, &[left_names.clone(), right_names.clone()], meshes_dir)?;
+        let fitted = fit_bodies(&parsed, &[left_names.clone(), right_names.clone()], meshes_dir, supplied)?;
 
         let mut bodies: Vec<Body> = Vec::new();
         let push_body = |bodies: &mut Vec<Body>, body: Body| -> Result<(), String> {
@@ -228,12 +275,10 @@ impl BimanualCollisionModel {
         }
 
         let world_iso = vec![Isometry3::identity(); bodies.len()];
-        let mut model = Self { left, right, bodies, pairs: Vec::new(), excluded: Vec::new(), world_iso };
-        model.set_pairs(pair_specs)?;
-        Ok(model)
+        Ok(Self { left, right, bodies, pairs: Vec::new(), excluded: Vec::new(), world_iso })
     }
 
-    /// Drop the caller's named exclusions (see [`new`](Self::new)). The names
+    /// Drop the caller's named exclusions (see [`Builder::exclude`]). The names
     /// must resolve to real bodies, but the assertion that the pair cannot
     /// collide is trusted, not re-derived: a pair that is not currently checked
     /// is a harmless no-op.
@@ -251,8 +296,7 @@ impl BimanualCollisionModel {
         Ok(())
     }
 
-    /// The pairs dropped by the `exclude` argument to [`new`](Self::new), for the
-    /// caller to report.
+    /// The pairs dropped by [`Builder::exclude`], for the caller to report.
     pub fn excluded_pairs(&self) -> &[(String, String)] {
         &self.excluded
     }
@@ -278,21 +322,10 @@ impl BimanualCollisionModel {
         Ok(())
     }
 
-    /// Like [`new`](Self::new) but reading the URDF from a file.
-    pub fn from_urdf_file(
-        path: &str,
-        meshes_dir: &str,
-        left_base: &str,
-        right_base: &str,
-        exclude: &[PairSpec],
-    ) -> Result<Self, String> {
-        let urdf = std::fs::read_to_string(path).map_err(|e| format!("read urdf '{path}': {e}"))?;
-        Self::new(&urdf, meshes_dir, left_base, right_base, exclude)
-    }
-
-    /// Link-local hull pieces of a body (fixed bodies are in the root frame),
-    /// for diagnostics and tests.
-    pub fn local_hulls(&self, name: &str) -> Option<&[Hull]> {
+    /// Link-local hull pieces of a body (fixed bodies are in the root frame).
+    /// Exposes the internal [`Hull`], so it is test-only.
+    #[cfg(test)]
+    fn local_hulls(&self, name: &str) -> Option<&[Hull]> {
         self.bodies.iter().find(|b| b.name == name).map(|b| b.local.as_slice())
     }
 
@@ -427,7 +460,18 @@ mod tests {
     }
 
     fn model() -> BimanualCollisionModel {
-        BimanualCollisionModel::new(URDF, MESHES, "openarm_left_link0", "openarm_right_link0", &[]).expect("model")
+        BimanualCollisionModel::builder(URDF, MESHES, "openarm_left_link0", "openarm_right_link0").build().expect("model")
+    }
+
+    // Two boxes that jointly span the padded torso bounding box (split in z), so
+    // they trivially contain the mesh. Just enough to exercise the multi-piece
+    // replacement path; the tuned deployment geometry lives in the shared
+    // tests/fixtures/openarm.rs, exercised by the integration test.
+    fn containing_boxes() -> Vec<ConvexPiece> {
+        vec![
+            ConvexPiece::aabb(Point3::new(-0.157, -0.097, -0.002), Point3::new(0.097, 0.097, 0.404)),
+            ConvexPiece::aabb(Point3::new(-0.157, -0.097, 0.396), Point3::new(0.097, 0.097, 0.775)),
+        ]
     }
 
     fn build(pairs: &[PairSpec]) -> Result<BimanualCollisionModel, String> {
@@ -444,7 +488,8 @@ mod tests {
     #[test]
     fn rejects_self_pairs_and_identical_bases() {
         assert!(build(&[PairSpec::new("openarm_left_link7", "openarm_left_link7")]).is_err());
-        let e = BimanualCollisionModel::new(URDF, MESHES, "openarm_left_link0", "openarm_left_link0", &[])
+        let e = BimanualCollisionModel::builder(URDF, MESHES, "openarm_left_link0", "openarm_left_link0")
+            .build()
             .err()
             .expect("identical bases must fail");
         assert!(e.contains("two chains"), "{e}");
@@ -470,17 +515,50 @@ mod tests {
     }
 
     #[test]
-    fn torso_decomposes_into_several_pieces() {
+    fn auto_fit_is_one_hull_per_body() {
         let m = model();
-        assert!(m.local_hulls("openarm_body_link0").expect("torso").len() > 1, "the torso should decompose");
-        assert_eq!(m.local_hulls("openarm_left_link7").expect("gripper").len(), 1, "the gripper stays one hull");
+        assert_eq!(m.local_hulls("openarm_body_link0").expect("torso").len(), 1, "auto-fit is a single hull");
+        assert_eq!(m.local_hulls("openarm_left_link7").expect("gripper").len(), 1);
     }
 
     #[test]
-    fn rest_pose_clears_d_safe() {
-        let mut m = model();
-        let p = m.min_distance(&[0.0; ARM_DOF], &[0.0; ARM_DOF]).expect("query");
-        assert!(p.distance >= 0.02 - 1e-9, "rest min {:+.4} should clear d_safe", p.distance);
+    fn supplied_hulls_replace_the_auto_fit() {
+        let m = BimanualCollisionModel::builder(URDF, MESHES, "openarm_left_link0", "openarm_right_link0")
+            .hulls("openarm_body_link0", containing_boxes())
+            .build()
+            .expect("supplied torso boxes contain the mesh");
+        assert_eq!(m.local_hulls("openarm_body_link0").expect("torso").len(), 2, "torso uses the two supplied boxes");
+    }
+
+    #[test]
+    fn rejects_supplied_hulls_that_miss_the_mesh() {
+        let tiny = vec![ConvexPiece::aabb(Point3::new(-0.01, -0.01, 0.0), Point3::new(0.01, 0.01, 0.02))];
+        let e = BimanualCollisionModel::builder(URDF, MESHES, "openarm_left_link0", "openarm_right_link0")
+            .hulls("openarm_body_link0", tiny)
+            .build()
+            .err()
+            .expect("a too-small hull must be rejected");
+        assert!(e.contains("do not contain"), "{e}");
+    }
+
+    #[test]
+    fn rejects_supplied_hulls_for_unknown_body() {
+        let e = BimanualCollisionModel::builder(URDF, MESHES, "openarm_left_link0", "openarm_right_link0")
+            .hulls("no_such_body", containing_boxes())
+            .build()
+            .err()
+            .expect("unknown body must fail");
+        assert!(e.contains("not a collision body"), "{e}");
+    }
+
+    #[test]
+    fn rejects_empty_supplied_hulls() {
+        let e = BimanualCollisionModel::builder(URDF, MESHES, "openarm_left_link0", "openarm_right_link0")
+            .hulls("openarm_body_link0", Vec::new())
+            .build()
+            .err()
+            .expect("empty pieces must fail");
+        assert!(e.contains("is empty"), "{e}");
     }
 
     #[test]
@@ -517,7 +595,7 @@ mod tests {
     }
 
     fn excluding(pairs: &[PairSpec]) -> Result<BimanualCollisionModel, String> {
-        BimanualCollisionModel::new(URDF, MESHES, "openarm_left_link0", "openarm_right_link0", pairs)
+        BimanualCollisionModel::builder(URDF, MESHES, "openarm_left_link0", "openarm_right_link0").exclude(pairs).build()
     }
 
     #[test]

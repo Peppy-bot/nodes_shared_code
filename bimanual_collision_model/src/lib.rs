@@ -21,18 +21,23 @@
 //! Pure Rust, no hardware or messaging deps, same discipline as `srs_model`.
 
 mod assemble;
+mod gjk;
 mod governor;
+mod hull;
 mod model;
-pub mod gjk;
-pub mod hull;
-pub mod pairs;
-pub mod stl;
+mod pairs;
+mod stl;
+// `urdf_collision` stays public: the `visualize` example loads meshes through it.
 pub mod urdf_collision;
 
 pub use governor::GovernorBand;
-pub use model::{BimanualCollisionModel, BodyPieces, PlacedPiece, Proximity};
+pub use hull::ConvexPiece;
+pub use model::{BimanualCollisionModel, BodyPieces, Builder, PlacedPiece, Proximity};
 pub use pairs::PairSpec;
 
 /// Re-export the linear-algebra types so downstream crates use the same
-/// `nalgebra` version `srs_model` (and `k`) were built against.
+/// `nalgebra` version `srs_model` (and `k`) were built against. `Point3` is
+/// lifted to the crate root because it is in the public hull-piece API
+/// ([`ConvexPiece::aabb`], [`ConvexPiece::from_points`]).
 pub use srs_model::nalgebra;
+pub use srs_model::nalgebra::Point3;
