@@ -87,20 +87,24 @@ type Split = (usize, Vec<Point3<f64>>, Vec<Point3<f64>>, f64);
 
 /// Greedily decompose a triangle soup into up to `max_pieces` simplified hulls,
 /// each split chosen to shrink total enclosed volume the most, stopping early
-/// when no split improves total volume by `min_gain_frac` of the whole body. A
-/// convex body keeps one piece (no split helps); a concave one (the torso
-/// waist, a forked yoke) splits. Cuts are planes swept along each piece's
-/// principal axes, not fixed slabs, and every whole triangle lands in one
-/// piece, so the union of the per-piece hulls contains the mesh with no face
-/// escape. `points` is a triangle soup (consecutive triples).
-pub fn decompose(points: &[Point3<f64>], cell: f64, max_pieces: usize, min_gain_frac: f64) -> Vec<(ConvexHull, f64)> {
+/// when no split cuts at least `min_gain` cubic metres off the total. An
+/// absolute threshold (not a fraction of the body) lets a big concave body (the
+/// torso) keep splitting while a small one (a gripper finger pair) stays whole,
+/// since the same shape saves far less absolute volume when it is small. Cuts
+/// are planes swept along each piece's principal axes, not fixed slabs, and
+/// every whole triangle lands in one piece, so the union of the per-piece hulls
+/// contains the mesh with no face escape. `points` is a triangle soup.
+///
+/// Errors rather than silently dropping a piece that cannot be hulled: a body
+/// must never be left without a proxy.
+pub fn decompose(points: &[Point3<f64>], cell: f64, max_pieces: usize, min_gain: f64) -> Result<Vec<(ConvexHull, f64)>, String> {
+    debug_assert_eq!(points.len() % 3, 0, "decompose expects a triangle soup");
     // Volume of a piece's simplified hull; a piece that cannot hull (degenerate)
     // reports infinite volume so a split that produces it is never chosen.
     let volume = |tris: &[Point3<f64>]| simplified_hull(tris, cell).map_or(f64::INFINITY, |(h, _)| hull_volume(&h));
-    let total = volume(points);
     let mut pieces = vec![points.to_vec()];
 
-    while pieces.len() < max_pieces && total.is_finite() {
+    while pieces.len() < max_pieces && volume(&pieces[0]).is_finite() {
         let mut best: Option<Split> = None;
         for (i, piece) in pieces.iter().enumerate() {
             let piece_volume = volume(piece);
@@ -121,14 +125,14 @@ pub fn decompose(points: &[Point3<f64>], cell: f64, max_pieces: usize, min_gain_
             }
         }
         match best {
-            Some((i, a, b, gain)) if gain > min_gain_frac * total => {
+            Some((i, a, b, gain)) if gain > min_gain => {
                 pieces[i] = a;
                 pieces.push(b);
             }
             _ => break,
         }
     }
-    pieces.iter().filter_map(|p| simplified_hull(p, cell).ok()).collect()
+    pieces.iter().map(|p| simplified_hull(p, cell)).collect()
 }
 
 /// Volume enclosed by a convex hull (divergence theorem over its faces; the
@@ -457,7 +461,7 @@ mod tests {
             }
         }
         let single_vol = hull_volume(&convex_hull(&soup).expect("single hull"));
-        let pieces = decompose(&soup, 0.05, 2, 0.1);
+        let pieces = decompose(&soup, 0.05, 2, 0.1).expect("decompose");
         assert_eq!(pieces.len(), 2, "two separated lobes should split into two");
         let pieces_vol: f64 = pieces.iter().map(|(h, _)| hull_volume(h)).sum();
         assert!(pieces_vol < 0.6 * single_vol, "splitting must cut volume: {pieces_vol} vs {single_vol}");

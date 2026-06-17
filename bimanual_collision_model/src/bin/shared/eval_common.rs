@@ -21,9 +21,11 @@ pub const FIXED: [&str; 3] = ["openarm_body_link0", "openarm_left_link0", "opena
 pub const SIMPLIFY_TOL: f64 = 0.004;
 
 /// Decomposition budget: up to this many convex pieces per body, taken only
-/// while a split still cuts total volume by at least `MIN_GAIN` of the body.
+/// while a split still cuts at least `MIN_GAIN` cubic metres off the body.
+/// Absolute, so only a large concave body (the torso) splits; a small one (the
+/// gripper finger pair) stays a single hull.
 pub const MAX_PIECES: usize = 5;
-pub const MIN_GAIN: f64 = 0.04;
+pub const MIN_GAIN: f64 = 0.001;
 
 /// Moving-link names per arm, from walking each chain at the zero pose.
 pub fn chains() -> Vec<Vec<String>> {
@@ -68,7 +70,7 @@ pub fn body_vertices() -> HashMap<String, Vec<Point3<f64>>> {
 
 /// One decomposition (up to `MAX_PIECES` simplified hulls) per collision body.
 pub fn fit_hulls() -> HashMap<String, Vec<(ConvexHull, f64)>> {
-    body_vertices().iter().map(|(k, v)| (k.clone(), decompose(v, SIMPLIFY_TOL, MAX_PIECES, MIN_GAIN))).collect()
+    body_vertices().iter().map(|(k, v)| (k.clone(), decompose(v, SIMPLIFY_TOL, MAX_PIECES, MIN_GAIN).expect("body decomposes into hulls"))).collect()
 }
 
 /// World placement of every body at a configuration.
