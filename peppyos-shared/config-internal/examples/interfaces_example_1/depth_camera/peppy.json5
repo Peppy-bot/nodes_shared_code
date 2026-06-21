@@ -1,0 +1,49 @@
+{
+  // A sensor interface exposing a video stream topic plus query/control
+  // services. Exercises nested object and fixed-length array message formats.
+  peppy_schema: "interface_v1",
+  manifest: {
+    name: "depth_camera",
+    tag: "v1",
+    labels: ["vendor:acme", "domain:perception"],
+  },
+  interfaces: {
+    topics: [
+      {
+        name: "video_stream",
+        qos_profile: "sensor_data",
+        message_format: {
+          header: {
+            $type: "object",
+            stamp: "time",
+            frame_id: "u32",
+          },
+          encoding: "string",
+          width: "u32",
+          height: "u32",
+          frame: { $type: "array", $items: "u8", $length: 4 },
+        },
+      },
+    ],
+    services: [
+      {
+        name: "video_stream_info",
+        response_message_format: {
+          width: "u32",
+          height: "u32",
+          frames_per_second: "u8",
+          encoding: "string",
+        },
+      },
+      {
+        name: "set_contrast",
+        request_message_format: { value: "i32" },
+        response_message_format: {
+          success: "bool",
+          message: "string",
+          current_value: "i32",
+        },
+      },
+    ],
+  },
+}

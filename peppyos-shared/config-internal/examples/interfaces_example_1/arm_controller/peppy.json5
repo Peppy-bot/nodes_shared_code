@@ -1,0 +1,39 @@
+{
+  // A control interface exposing a long-running action. Exercises the full
+  // action shape: goal/result services plus a feedback topic.
+  peppy_schema: "interface_v1",
+  manifest: {
+    name: "arm_controller",
+    tag: "v1",
+    labels: ["domain:manipulation"],
+  },
+  interfaces: {
+    actions: [
+      {
+        name: "move_to_pose",
+        goal_service: {
+          qos_profile: "reliable",
+          request_message_format: {
+            x: "f64",
+            y: "f64",
+            z: "f64",
+          },
+          response_message_format: { accepted: "bool" },
+        },
+        feedback_topic: {
+          qos_profile: "standard",
+          message_format: {
+            percent_complete: "u8",
+            distance_remaining: "f64",
+          },
+        },
+        result_service: {
+          response_message_format: {
+            success: "bool",
+            message: "string",
+          },
+        },
+      },
+    ],
+  },
+}
