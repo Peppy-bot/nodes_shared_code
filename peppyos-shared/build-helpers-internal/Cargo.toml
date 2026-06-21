@@ -1,8 +1,9 @@
 [package]
 name = "build-helpers"
-version = "0.0.1"
-authors = ["Tuatini Godard <tuatini@peppy.bot>"]
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish = false
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true

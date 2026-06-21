@@ -1,43 +1,44 @@
 [package]
 name = "pmi"
-version = "0.0.1"
-authors = ["Tuatini Godard <tuatini@peppy.bot>"]
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish = false
 
 [dependencies]
 config = { path = "../config-internal" }
-bytes = "1"
-serde_json = "1.0"
+bytes.workspace = true
+serde_json.workspace = true
 # `sync` + `rt` are what pmi's own code names directly. The MockAdapter also uses
 # tokio `time` and the multi-thread runtime; those arrive transitively via zenoh,
 # so the mock is not built as a standalone zenoh-less backend (see lib.rs).
-tokio = { version = "1", features = ["sync", "rt"] }
+tokio = { workspace = true, features = ["sync", "rt"] }
 # Used for Subscription / ServiceQueryable channels: a flume bounded
 # channel lets the zenoh reception callback `send` synchronously (with
 # backpressure) from any thread, including zenoh's runtime worker where
 # `tokio::sync::mpsc::Sender::blocking_send` would panic.
-flume = "0.12"
-tracing = "0.1"
+flume.workspace = true
+tracing.workspace = true
 derive_more = { version = "2", features = ["from"] }
-tempfile = "3"
+tempfile.workspace = true
 
 # Optional deps
 # Exact-pinned; peppylib pins the same `=1.9.0` in its [dev-dependencies] so
 # its test binaries share this build — bump the two together.
-zenoh = { version = "=1.9.0", optional = true }
+zenoh = { workspace = true, optional = true }
 
 [build-dependencies]
 build-helpers = { path = "../build-helpers-internal" }
 
 [dev-dependencies]
-tokio = { version = "1", features = [
+tokio = { workspace = true, features = [
     "sync",
     "rt",
     "macros",
     "time",
     "test-util",
 ] }
-serde_json5 = "0.2"
+serde_json5.workspace = true
 # Used by the FIFO-noise regression test in `tests/fifo_noise.rs` to install a
 # process-wide tracing subscriber that counts `zenoh::api::handlers::fifo`
 # ERROR events. Already in the dependency tree transitively via zenoh.

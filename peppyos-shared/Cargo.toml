@@ -1,0 +1,47 @@
+# Workspace root for the peppyOS shared crates.
+#
+# Public surface: only `peppylib-rs` (Rust, imported as `peppylib`) and
+# `peppylib-py` (Python wheel built by maturin) are meant for downstream users.
+# The remaining members are internal and carry `publish = false`.
+[workspace]
+resolver = "2"
+members = [
+    "peppylib-rs",
+    "peppylib-py",
+    "core-node-api",
+    "config-internal",
+    "pmi-internal",
+    "build-helpers-internal",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+authors = ["Tuatini Godard <tuatini@peppy.bot>"]
+
+# Versions shared by 2+ members, or families that must move in lockstep
+# (pyo3, zenoh). Members opt in with `<dep> = { workspace = true }` and add
+# their own `features`/`optional` on top. Single-consumer deps stay inline in
+# the owning crate's manifest.
+[workspace.dependencies]
+askama = "0.16"
+bytes = "1"
+capnp = "0.26"
+capnpc = "0.26"
+flume = "0.12"
+rand = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_json5 = "0.2"
+sha2 = "0.11"
+tempfile = "3"
+thiserror = "2"
+tokio = "1"
+tracing = "0.1"
+# pyo3 family — bump together.
+pyo3 = "0.29"
+pyo3-async-runtimes = "0.29"
+pyo3-build-config = "0.29"
+pythonize = "0.29"
+# Exact-pinned; pmi and peppylib-rs share one zenoh build. Bump as a unit.
+zenoh = "=1.9.0"

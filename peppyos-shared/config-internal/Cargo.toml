@@ -1,28 +1,29 @@
 [package]
 name = "config"
-version = "0.0.1"
-authors = ["Tuatini Godard <tuatini@peppy.bot>"]
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish = false
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-thiserror = "2.0"
-serde = { version = "1.0", features = ["derive"] }
+thiserror.workspace = true
+serde.workspace = true
 # `preserve_order` keeps `serde_json::Map` backed by `IndexMap` so that
 # round-tripping a `NodeConfig` through `json5_pretty::to_string_pretty`
 # preserves `MessageFormat` field order; the capnp wire layout is keyed
 # off that order, so losing it breaks producer/consumer schema compat.
-serde_json = { version = "1.0", features = ["preserve_order"] }
-serde_json5 = "0.2"
+serde_json = { workspace = true, features = ["preserve_order"] }
+serde_json5.workspace = true
 serde_path_to_error = "0.1"
-tracing = "0.1"
+tracing.workspace = true
 proc-macro2 = "1.0"
 walkdir = "2.5"
-askama = "0.16"
-capnp = "0.26"
-capnpc = "0.26"
-sha2 = "0.11"
-tempfile = "3.8"
+askama.workspace = true
+capnp.workspace = true
+capnpc.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
 indexmap = { version = "2.2", features = ["serde"] }
 git2 = { version = "0.21", optional = true }
 dirs = "6"
