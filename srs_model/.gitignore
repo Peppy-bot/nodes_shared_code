@@ -35,13 +35,10 @@ scripts/uv.lock
 .peppy
 
 # Documentation stuff
-‎node_modules
+node_modules
 
 # Python stuff
 .pixi
 __pycache__/
 *.pyc
 *.abi3*.so
-
-# Downloaded apptainer RPM (fetched at build time, not vendored)
-crates/containers-internal/vendor/apptainer-*.rpm

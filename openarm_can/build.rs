@@ -66,7 +66,14 @@ fn sdk_header_present(explicit: Option<&str>) -> bool {
     const HEADER: &str = "openarm/can/socket/openarm.hpp";
     let mut roots: Vec<&Path> = Vec::new();
     if let Some(dir) = explicit {
-        roots.push(Path::new(dir));
+        let root = Path::new(dir);
+        if !root.join(HEADER).exists() {
+            println!(
+                "cargo:warning=OPENARM_CAN_INCLUDE_DIR is set to {dir} but {HEADER} was not \
+                 found there; falling back to system include directories"
+            );
+        }
+        roots.push(root);
     }
     roots.push(Path::new("/usr/include"));
     roots.push(Path::new("/usr/local/include"));

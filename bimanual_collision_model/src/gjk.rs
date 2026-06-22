@@ -711,7 +711,6 @@ mod tests {
 
     #[test]
     fn distance_is_continuous_through_contact() {
-        use rand::{RngExt, SeedableRng};
         // Mesh hulls are never perfectly symmetric; an irregular blob swept
         // apart has a signed distance that rises smoothly through zero (EPA
         // below, GJK above), with no jump at contact.
