@@ -1,0 +1,28 @@
+# Virtual workspace for peppyOS shared, public-facing crates.
+#
+# Crates are migrated here from the `peppyos` workspace PR by PR. This PR moves
+# `peppylib-py`; `peppylib` and `core-node-api` follow. Crates that have not been
+# moved yet are referenced from `peppyos` via relative reverse paths
+# (`../../../peppyos/crates/<crate>`), which only resolve inside the superproject
+# checkout where `peppyos` and `nodes_shared_code` are sibling submodules.
+
+[workspace]
+members = ["peppylib-py"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.1"
+authors = ["Tuatini Godard <tuatini@peppy.bot>"]
+edition = "2024"
+
+[workspace.dependencies]
+parking_lot = "0.12"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+# Strip symbols + debuginfo from release artifacts. The peppylib Python extension
+# (_peppylib.abi3.so) is built in release via maturin/PEP517; unstripped it is
+# hundreds of MB and balloons uv's append-only wheel cache. Stripping cuts the
+# cdylib ~10-40x and shrinks the wheels shipped to PyPI.
+strip = true
