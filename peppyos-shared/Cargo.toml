@@ -1,13 +1,14 @@
 # Virtual workspace for peppyOS shared, public-facing crates.
 #
-# Crates are migrated here from the `peppyos` workspace PR by PR. This PR moves
-# `peppylib-py`; `peppylib` and `core-node-api` follow. Crates that have not been
-# moved yet are referenced from `peppyos` via relative reverse paths
-# (`../../../peppyos/crates/<crate>`), which only resolve inside the superproject
-# checkout where `peppyos` and `nodes_shared_code` are sibling submodules.
+# Crates are migrated here from the `peppyos` workspace PR by PR. Earlier PRs moved
+# `peppylib-py` and `peppylib` (the Rust lib, now the `peppylib-rs` package);
+# `core-node-api` follows. Crates that have not been moved yet are referenced from
+# `peppyos` via relative reverse paths (`../../../peppyos/crates/<crate>`), which only
+# resolve inside the superproject checkout where `peppyos` and `nodes_shared_code` are
+# sibling submodules.
 
 [workspace]
-members = ["peppylib-py"]
+members = ["peppylib-py", "peppylib-rs"]
 resolver = "3"
 
 [workspace.package]
