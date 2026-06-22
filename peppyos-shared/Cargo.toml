@@ -8,7 +8,7 @@
 # sibling submodules.
 
 [workspace]
-members = ["peppylib-py", "peppylib-rs"]
+members = ["peppylib-py", "peppylib-rs", "core-node-api"]
 resolver = "3"
 
 [workspace.package]
