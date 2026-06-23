@@ -37,7 +37,13 @@ impl NodeInitRequest {
         let mut builder = Builder::new_default();
         {
             let mut request = builder.init_root::<node_capnp::node_init_request::Builder>();
-            request.set_node_root_dir(self.node_root_dir.to_string_lossy());
+            let node_root_dir = self.node_root_dir.to_str().ok_or_else(|| {
+                crate::Error::Encoding(format!(
+                    "node_root_dir is not valid UTF-8: {}",
+                    self.node_root_dir.display()
+                ))
+            })?;
+            request.set_node_root_dir(node_root_dir);
             request.set_node_name(&self.node_name);
             request.set_git_hash(&self.git_hash);
             request.set_with_container(self.with_container);

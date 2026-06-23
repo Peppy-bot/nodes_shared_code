@@ -35,7 +35,7 @@ impl NodeSyncRequest {
     pub fn encode(&self) -> Result<Payload> {
         let mut builder = Builder::new_default();
         {
-            let mut request = builder.init_root::<node_capnp::node_generate_request::Builder>();
+            let mut request = builder.init_root::<node_capnp::node_sync_request::Builder>();
             request.set_node_root_dir(self.node_root_dir.to_string_lossy());
             request.set_git_hash(&self.git_hash);
             request.set_include_repositories(self.include_repositories);
@@ -45,7 +45,7 @@ impl NodeSyncRequest {
 
     pub fn decode(data: &[u8]) -> Result<Self> {
         let reader = decode_message(data)?;
-        let request = reader.get_root::<node_capnp::node_generate_request::Reader>()?;
+        let request = reader.get_root::<node_capnp::node_sync_request::Reader>()?;
         Ok(Self {
             node_root_dir: PathBuf::from(request.get_node_root_dir()?.to_str()?),
             git_hash: request.get_git_hash()?.to_str()?.to_owned(),

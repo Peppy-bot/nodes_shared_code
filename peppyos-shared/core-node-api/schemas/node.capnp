@@ -149,8 +149,8 @@ struct NodeInitResponse {
     errorMessage @1 :Text;
 }
 
-# Node Generate service
-struct NodeGenerateRequest {
+# Node Sync service
+struct NodeSyncRequest {
     # Root directory of the node/workspace
     nodeRootDir @0 :Text;
     # Git commit hash of the node being synced

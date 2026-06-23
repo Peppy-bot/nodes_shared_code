@@ -40,6 +40,12 @@ fn main() {
         "Could not find capnp binary. Please install Cap'n Proto: https://capnproto.org/install.html",
     );
 
+    // Regenerate when the bundled capnp tools change, not just the schemas, so a
+    // capnp-binary update (new compiler version, different platform binary)
+    // triggers fresh code generation.
+    println!("cargo:rerun-if-changed={}", tools_dir.display());
+    println!("cargo:rerun-if-changed={}", capnp_path.display());
+
     let schemas_dir = manifest_dir.join("schemas");
     for entry in std::fs::read_dir(&schemas_dir).expect("Failed to read schemas directory") {
         let entry = entry.expect("Failed to read schema directory entry");

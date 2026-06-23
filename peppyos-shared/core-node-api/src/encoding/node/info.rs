@@ -116,6 +116,16 @@ impl NodeInfoResponse {
                     response.set_not_in_stack(());
                 }
                 NodeInfoResponse::Found(info) => {
+                    // `run_log_paths` is documented to be order-aligned with
+                    // `instances`. Reject a mismatch here rather than emit a
+                    // payload that would silently misassociate logs on decode.
+                    if info.run_log_paths.len() != info.instances.len() {
+                        return Err(crate::Error::Encoding(format!(
+                            "run_log_paths length ({}) does not match instances length ({})",
+                            info.run_log_paths.len(),
+                            info.instances.len()
+                        )));
+                    }
                     let mut found = response.init_found();
                     let config_json5 = serde_json5::to_string(&info.config).map_err(|e| {
                         crate::Error::Encoding(format!("failed to serialize config: {}", e))
@@ -215,6 +225,16 @@ impl NodeInfoResponse {
                 let mut run_log_paths = Vec::with_capacity(run_log_paths_reader.len() as usize);
                 for i in 0..run_log_paths_reader.len() {
                     run_log_paths.push(PathBuf::from(run_log_paths_reader.get(i)?.to_str()?));
+                }
+                // `run_log_paths` is documented to be order-aligned with
+                // `instances`. Reject a mismatched payload instead of handing
+                // back logs misassociated with the wrong instances.
+                if run_log_paths.len() != instances.len() {
+                    return Err(crate::Error::Decoding(format!(
+                        "run_log_paths length ({}) does not match instances length ({})",
+                        run_log_paths.len(),
+                        instances.len()
+                    )));
                 }
                 Ok(NodeInfoResponse::Found(Box::new(NodeInfo {
                     config,
@@ -323,7 +343,11 @@ mod tests {
                 },
             ],
             add_log_path: None,
-            run_log_paths: vec![],
+            // Kept order-aligned with `instances` so encode/decode accept it.
+            run_log_paths: vec![
+                PathBuf::from("/var/log/inst-with-bindings.log"),
+                PathBuf::from("/var/log/inst-no-bindings.log"),
+            ],
         };
         let encoded = NodeInfoResponse::Found(Box::new(info))
             .encode()

@@ -38,7 +38,7 @@ pub fn estimate_serialized_size(format: &MessageFormat) -> MessageSizeEstimate {
         size_of_schema(schema, &mut acc);
     }
     MessageSizeEstimate {
-        bytes: round_up_8(acc.bytes) + FRAMING_OVERHEAD,
+        bytes: round_up_8(acc.bytes).saturating_add(FRAMING_OVERHEAD),
         has_variable: acc.has_variable,
     }
 }
@@ -65,18 +65,18 @@ fn size_of_schema(schema: &SchemaType, acc: &mut Acc) {
     match schema {
         SchemaType::Type(t) | SchemaType::Primitive(PrimitiveSchema { kind: t, .. }) => match t {
             TypeToken::String | TypeToken::Bytes => {
-                acc.bytes += POINTER_BYTES;
+                acc.bytes = acc.bytes.saturating_add(POINTER_BYTES);
                 acc.has_variable = true;
             }
-            fixed => acc.bytes += primitive_bytes(fixed),
+            fixed => acc.bytes = acc.bytes.saturating_add(primitive_bytes(fixed)),
         },
         SchemaType::Array(ArraySchema { items, length, .. }) => {
-            acc.bytes += POINTER_BYTES; // list pointer
+            acc.bytes = acc.bytes.saturating_add(POINTER_BYTES); // list pointer
             match length {
                 Some(len) => {
                     let mut item = Acc::default();
                     size_of_schema(items, &mut item);
-                    acc.bytes += len * item.bytes;
+                    acc.bytes = acc.bytes.saturating_add(len.saturating_mul(item.bytes));
                     acc.has_variable |= item.has_variable;
                 }
                 // Unbounded array: the element count is a runtime property.
@@ -84,19 +84,19 @@ fn size_of_schema(schema: &SchemaType, acc: &mut Acc) {
             }
         }
         SchemaType::Object(ObjectSchema { fields, .. }) => {
-            acc.bytes += POINTER_BYTES; // struct pointer
+            acc.bytes = acc.bytes.saturating_add(POINTER_BYTES); // struct pointer
             let mut inner = Acc::default();
             for field in fields.values() {
                 size_of_schema(field, &mut inner);
             }
-            acc.bytes += round_up_8(inner.bytes);
+            acc.bytes = acc.bytes.saturating_add(round_up_8(inner.bytes));
             acc.has_variable |= inner.has_variable;
         }
     }
 }
 
 fn round_up_8(n: usize) -> usize {
-    n.div_ceil(8) * 8
+    n.div_ceil(8).saturating_mul(8)
 }
 
 #[cfg(test)]

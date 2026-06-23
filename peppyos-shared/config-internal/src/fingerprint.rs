@@ -5,19 +5,31 @@ use std::path::Path;
 
 const NODE_CONFIG_FINGERPRINT_FILE: &str = "peppy.json5.sha256";
 
-/// Generates the initial node fingerprint and copies the release fingerprint.
+/// Resolves the canonical fingerprint file path shared by generate/read/verify.
 ///
-/// This function:
-/// 1. Computes and writes the SHA256 hash of the node config to `{output_path}/peppy.json5.sha256`
+/// `output_path` is interpreted relative to the directory containing
+/// `node_config` (e.g. `PEPPYGEN_OUTPUT_PATH`), yielding
+/// `{node_config_parent}/{output_path}/peppy.json5.sha256`. Keeping every
+/// caller on this one helper guarantees the writer and the readers agree on the
+/// exact location.
+fn node_config_fingerprint_path(node_config: &Path, output_path: &Path) -> std::path::PathBuf {
+    let config_dir = node_config.parent().unwrap_or_else(|| Path::new("."));
+    config_dir
+        .join(output_path)
+        .join(NODE_CONFIG_FINGERPRINT_FILE)
+}
+
+/// Generates the node config fingerprint next to the generated peppygen output.
 ///
-/// Both fingerprints are required and must be created successfully.
+/// Computes the SHA256 hash of `node_config` and writes it to
+/// `{node_config_parent}/{output_path}/peppy.json5.sha256` — the same location
+/// [`read_codegen_fingerprint`] and [`verify_codegen_fingerprint`] read from.
 pub fn generate_node_config_fingerprint(
     node_config: impl AsRef<Path>,
     output_path: impl AsRef<Path>,
 ) -> Result<()> {
     let node_config = node_config.as_ref();
-    let generated_crate = output_path.as_ref();
-    let fingerprint_path = generated_crate.join(NODE_CONFIG_FINGERPRINT_FILE);
+    let fingerprint_path = node_config_fingerprint_path(node_config, output_path.as_ref());
 
     let config_bytes = fs::read(node_config)?;
 
@@ -48,13 +60,8 @@ pub fn read_codegen_fingerprint(
     peppy_config: impl AsRef<Path>,
     output_path: impl AsRef<Path>,
 ) -> Result<String> {
-    let peppy_config_dir = peppy_config
-        .as_ref()
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
-    let fingerprint_path = peppy_config_dir
-        .join(output_path.as_ref())
-        .join(NODE_CONFIG_FINGERPRINT_FILE);
+    let fingerprint_path =
+        node_config_fingerprint_path(peppy_config.as_ref(), output_path.as_ref());
 
     fs::read_to_string(&fingerprint_path)
         .map(|s| s.trim().to_string())
@@ -92,12 +99,12 @@ pub fn verify_codegen_fingerprint(
 /// 1. The config fingerprint (`peppy.json5.sha256`) in the peppygen output directory
 #[cfg(feature = "test_helpers")]
 pub fn create_codegen_fingerprint(peppy_config_path: &Path, output_path: &Path) {
-    let peppy_config_dir = peppy_config_path.parent().unwrap_or(Path::new("."));
-    let fingerprint_dir = peppy_config_dir.join(output_path);
-    fs::create_dir_all(&fingerprint_dir).expect("fingerprint dir should be created");
+    let fingerprint_path = node_config_fingerprint_path(peppy_config_path, output_path);
+    if let Some(dir) = fingerprint_path.parent() {
+        fs::create_dir_all(dir).expect("fingerprint dir should be created");
+    }
 
     // Create config fingerprint in peppygen output directory
-    let fingerprint_path = fingerprint_dir.join(NODE_CONFIG_FINGERPRINT_FILE);
     let fingerprint = fingerprint_for_bytes(
         &fs::read(peppy_config_path).expect("peppy config should be readable"),
     );
@@ -108,10 +115,10 @@ pub fn create_codegen_fingerprint(peppy_config_path: &Path, output_path: &Path) 
 /// Creates a config fingerprint file with incorrect content to test mismatch errors.
 #[cfg(feature = "test_helpers")]
 pub fn create_wrong_codegen_fingerprint(peppy_config_path: &Path, output_path: &Path) {
-    let peppy_config_dir = peppy_config_path.parent().unwrap_or(Path::new("."));
-    let fingerprint_dir = peppy_config_dir.join(output_path);
-    fs::create_dir_all(&fingerprint_dir).expect("fingerprint dir should be created");
-    let fingerprint_path = fingerprint_dir.join(NODE_CONFIG_FINGERPRINT_FILE);
+    let fingerprint_path = node_config_fingerprint_path(peppy_config_path, output_path);
+    if let Some(dir) = fingerprint_path.parent() {
+        fs::create_dir_all(dir).expect("fingerprint dir should be created");
+    }
     fs::write(&fingerprint_path, "wrong_fingerprint_value\n")
         .expect("fingerprint should be written");
 }
@@ -198,11 +205,10 @@ mod tests {
         let config_path = tmp.path().join(crate::consts::NODE_CONFIG_FILE);
         fs::write(&config_path, "original contents").expect("failed to write config");
 
-        // `generate` writes to an absolute output dir, while `read`/`verify`
-        // address that dir *relative to the config's parent*. Generating into
-        // `<config_parent>/<rel_output>` makes the two sides line up.
+        // `generate`, `read`, and `verify` all resolve the fingerprint relative
+        // to the config's parent, so the same `output_path` feeds every side.
         let rel_output = std::path::Path::new(crate::consts::PEPPYGEN_OUTPUT_PATH);
-        generate_node_config_fingerprint(&config_path, tmp.path().join(rel_output))
+        generate_node_config_fingerprint(&config_path, rel_output)
             .expect("failed to generate fingerprint");
 
         // `read_codegen_fingerprint` returns exactly the digest that was stored.

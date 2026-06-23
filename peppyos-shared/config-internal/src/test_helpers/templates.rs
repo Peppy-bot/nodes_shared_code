@@ -61,6 +61,7 @@ where
     let dir_path = to_path.as_ref();
     let file_path = dir_path.join("peppy_launcher.json5");
 
+    fs::create_dir_all(dir_path).expect("failed to create parent directory");
     fs::write(&file_path, root_content).expect("failed to write peppy config content");
 
     file_path

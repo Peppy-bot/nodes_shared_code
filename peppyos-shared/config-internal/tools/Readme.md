@@ -1,6 +1,6 @@
 # How to build?
 
-Pull the latest version from the install instructions [here](https://capnproto.org/install.html).
+Pull the latest version from the [Cap'n Proto installation instructions](https://capnproto.org/install.html).
 And use the following flags during compilation for static linking:
 
 ```sh

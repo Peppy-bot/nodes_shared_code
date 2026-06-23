@@ -58,11 +58,30 @@ pub fn run_command_streaming(command: &mut Command, label: &str) -> CommandOutpu
         label: String,
     ) -> std::thread::JoinHandle<String> {
         std::thread::spawn(move || {
+            // Drain the pipe byte-by-line so non-UTF-8 output can never stall
+            // the reader (and thus block the child on a full pipe). Bytes are
+            // converted lossily for logging and capture.
+            let mut reader = std::io::BufReader::new(pipe);
             let mut captured = String::new();
-            for line in std::io::BufReader::new(pipe).lines().map_while(Result::ok) {
+            let mut buf = Vec::new();
+            while let Ok(n) = reader.read_until(b'\n', &mut buf) {
+                if n == 0 {
+                    break;
+                }
+                // Trim a trailing newline (and CR) like BufRead::lines did; the
+                // captured copy keeps a normalized '\n' terminator.
+                let mut bytes = &buf[..];
+                if bytes.last() == Some(&b'\n') {
+                    bytes = &bytes[..bytes.len() - 1];
+                    if bytes.last() == Some(&b'\r') {
+                        bytes = &bytes[..bytes.len() - 1];
+                    }
+                }
+                let line = String::from_utf8_lossy(bytes);
                 println!("cargo:warning=[{}] {}", label, line);
                 captured.push_str(&line);
                 captured.push('\n');
+                buf.clear();
             }
             captured
         })
@@ -124,9 +143,11 @@ pub fn run_command_with_timeout(command: &mut Command, timeout: Duration) -> Com
 
     fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<String> {
         std::thread::spawn(move || {
-            let mut captured = String::new();
-            pipe.read_to_string(&mut captured).ok();
-            captured
+            // Read raw bytes (not read_to_string) so non-UTF-8 output is still
+            // fully drained and captured lossily instead of being discarded.
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes).ok();
+            String::from_utf8_lossy(&bytes).into_owned()
         })
     }
     let stdout_thread = drain(child.stdout.take().unwrap());

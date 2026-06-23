@@ -25,9 +25,21 @@ pub fn blocked_mount_paths_display() -> String {
 /// allowed. Also handles macOS `/private/X` equivalents (e.g., `/private/tmp` maps
 /// to `/tmp`).
 pub fn is_blocked_mount_source(path: &str) -> bool {
-    // Normalize trailing slashes so `/tmp/` matches `/tmp`. An all-slash input
-    // (e.g. `/` or `//`) normalizes back to the root `/`.
-    let trimmed = path.trim_end_matches('/');
+    // Collapse runs of `/` so `/private//tmp` or `//tmp` cannot slip past the
+    // checks below (e.g. `/private//tmp` would otherwise strip to `//tmp` and
+    // miss `/tmp`). Then trim trailing slashes so `/tmp/` matches `/tmp`. An
+    // all-slash input (e.g. `/` or `//`) normalizes back to the root `/`.
+    let mut collapsed = String::with_capacity(path.len());
+    let mut prev_slash = false;
+    for ch in path.chars() {
+        let is_slash = ch == '/';
+        if is_slash && prev_slash {
+            continue;
+        }
+        collapsed.push(ch);
+        prev_slash = is_slash;
+    }
+    let trimmed = collapsed.trim_end_matches('/');
     let normalized = if trimmed.is_empty() { "/" } else { trimmed };
 
     if BLOCKED_MOUNT_PATHS.contains(&normalized) {
@@ -92,5 +104,17 @@ mod tests {
         assert!(is_blocked_mount_source("/private/tmp/"));
         // Trailing slash on an allowed subdirectory stays allowed.
         assert!(!is_blocked_mount_source("/tmp/my_app/"));
+    }
+
+    #[test]
+    fn rejects_duplicate_slash_variants() {
+        // Duplicate slashes must not bypass the blocked-path check.
+        assert!(is_blocked_mount_source("//tmp"));
+        assert!(is_blocked_mount_source("/private//tmp"));
+        assert!(is_blocked_mount_source("//private//var"));
+        assert!(is_blocked_mount_source("/var////"));
+        // Duplicate slashes in an allowed subdirectory stay allowed.
+        assert!(!is_blocked_mount_source("/tmp//my_app"));
+        assert!(!is_blocked_mount_source("/private//tmp//foo"));
     }
 }

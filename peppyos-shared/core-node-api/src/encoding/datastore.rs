@@ -1,10 +1,10 @@
 //! Cap'n Proto encoding utilities for datastore messages.
 //!
-//! Keys are restricted to the same character set as a node name (see
-//! [`DatastoreKey`]): a non-empty string of ASCII letters, digits, `_` and `-`.
-//! Values are arbitrary bytes carried in a Cap'n Proto `Data` field, paired
-//! with a Zenoh-style encoding tag, so any value type accepted by Zenoh
-//! round-trips faithfully.
+//! Keys are arbitrary, non-empty strings (see [`DatastoreKey`]). They are
+//! carried in the payload (not a Zenoh keyexpr), so any character is allowed:
+//! slashes, dots, spaces and Unicode all round-trip. Values are arbitrary bytes
+//! carried in a Cap'n Proto `Data` field, paired with a Zenoh-style encoding
+//! tag, so any value type accepted by Zenoh round-trips faithfully.
 
 use std::fmt;
 
@@ -15,18 +15,16 @@ use crate::{Payload, Result};
 
 use super::{capnp_list_len, decode_message, encode_message};
 
-/// A datastore key, validated to use the same characters allowed in a node
-/// name.
+/// A datastore key: any non-empty string.
 ///
-/// The datastore stores and retrieves values by exact key. To keep keys simple
-/// and free of special characters, a key must be non-empty and contain only the
-/// characters permitted in a node name: ASCII letters, digits, `_` and `-`, as
-/// defined by the shared `config::consts::ALLOWED_CONFIG_CHARS` constant.
-/// Slashes, whitespace, other punctuation and non-ASCII text are all rejected.
+/// The datastore stores and retrieves values by exact key. Keys are carried in
+/// the message payload (not a Zenoh keyexpr), so any character is allowed —
+/// slashes, dots, spaces and Unicode all round-trip. The only requirement is
+/// that the key is non-empty.
 ///
-/// Construct one with [`DatastoreKey::try_from`]; an invalid key yields a
+/// Construct one with [`DatastoreKey::try_from`]; an empty key yields a
 /// [`DatastoreKeyError`]. Following the "parse, don't validate" pattern, once a
-/// `DatastoreKey` exists it is guaranteed valid, so request types carry it
+/// `DatastoreKey` exists it is guaranteed non-empty, so request types carry it
 /// directly rather than a raw `String`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DatastoreKey(String);
@@ -78,20 +76,18 @@ impl fmt::Display for DatastoreKey {
     }
 }
 
-/// Why a string was rejected as a [`DatastoreKey`]. Each variant repeats the
-/// offending key so the caller can see exactly what was passed.
+/// Why a string was rejected as a [`DatastoreKey`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DatastoreKeyError {
     /// The key was the empty string.
     #[error("datastore key must not be empty")]
     Empty,
 
-    /// The key contained a character outside the node-name character set
-    /// (`config::consts::ALLOWED_CONFIG_CHARS`), such as a slash, whitespace,
-    /// other punctuation or non-ASCII text.
+    /// Retained for backwards compatibility. Datastore keys are now arbitrary
+    /// strings (any character is allowed), so this variant is no longer
+    /// produced; only [`Empty`](Self::Empty) is.
     #[error(
-        "datastore key {key:?} contains the disallowed character {character:?} at byte {index}: datastore keys may only use the characters allowed in a node name ({allowed})",
-        allowed = config::consts::ALLOWED_CONFIG_CHARS,
+        "datastore key {key:?} contains the disallowed character {character:?} at byte {index}"
     )]
     ForbiddenCharacter {
         key: String,
@@ -100,26 +96,14 @@ pub enum DatastoreKeyError {
     },
 }
 
-/// Checks that `key` uses only the characters allowed in a node name.
+/// Checks that `key` is a valid datastore key.
 ///
-/// A key must be non-empty and contain only the characters in
-/// `config::consts::ALLOWED_CONFIG_CHARS` (ASCII letters, digits, `_` and `-`).
-/// Reusing that constant keeps datastore keys aligned with node names, so they
-/// stay free of slashes, whitespace and other special characters.
+/// Datastore keys are arbitrary strings carried in the payload (not a Zenoh
+/// keyexpr), so any character is allowed — slashes, dots, spaces and Unicode
+/// all round-trip. The only requirement is that the key is non-empty.
 fn validate_datastore_key(key: &str) -> core::result::Result<(), DatastoreKeyError> {
     if key.is_empty() {
         return Err(DatastoreKeyError::Empty);
-    }
-
-    if let Some((index, character)) = key
-        .char_indices()
-        .find(|(_, c)| !config::consts::ALLOWED_CONFIG_CHARS.contains(*c))
-    {
-        return Err(DatastoreKeyError::ForbiddenCharacter {
-            key: key.to_owned(),
-            index,
-            character,
-        });
     }
 
     Ok(())
@@ -136,8 +120,7 @@ pub struct DatastoreStoreRequest {
 impl DatastoreStoreRequest {
     /// Builds a store request, validating `key` as a [`DatastoreKey`]. Returns
     /// [`Error::InvalidDatastoreKey`](crate::Error::InvalidDatastoreKey) if the
-    /// key uses characters outside the node-name set (ASCII letters, digits,
-    /// `_` and `-`).
+    /// key is empty.
     pub fn new(
         key: impl Into<String>,
         value: impl Into<Vec<u8>>,
@@ -206,8 +189,7 @@ pub struct DatastoreGetRequest {
 impl DatastoreGetRequest {
     /// Builds a get request, validating `key` as a [`DatastoreKey`]. Returns
     /// [`Error::InvalidDatastoreKey`](crate::Error::InvalidDatastoreKey) if the
-    /// key uses characters outside the node-name set (ASCII letters, digits,
-    /// `_` and `-`).
+    /// key is empty.
     pub fn new(key: impl Into<String>) -> Result<Self> {
         Ok(Self {
             key: DatastoreKey::try_from(key.into())?,
@@ -385,8 +367,7 @@ pub struct DatastoreRemoveRequest {
 impl DatastoreRemoveRequest {
     /// Builds a remove request, validating `key` as a [`DatastoreKey`]. Returns
     /// [`Error::InvalidDatastoreKey`](crate::Error::InvalidDatastoreKey) if the
-    /// key uses characters outside the node-name set (ASCII letters, digits,
-    /// `_` and `-`).
+    /// key is empty.
     pub fn new(key: impl Into<String>) -> Result<Self> {
         Ok(Self {
             key: DatastoreKey::try_from(key.into())?,
@@ -484,7 +465,7 @@ mod tests {
 
     #[test]
     fn get_request_round_trips_node_name_key() {
-        // Keys use the node-name character set: letters, digits, `_` and `-`.
+        // A simple key of letters, digits, `_` and `-` round-trips unchanged.
         let key = "robot_state-1";
         let request = DatastoreGetRequest::new(key).expect("valid key");
         let payload = request.encode().expect("encode");
@@ -569,9 +550,10 @@ mod tests {
     }
 
     #[test]
-    fn datastore_key_accepts_node_name_keys() {
-        // The allowed set is the node-name character set: ASCII letters (either
-        // case), digits, `_` and `-`.
+    fn datastore_key_accepts_arbitrary_non_empty_keys() {
+        // Keys are arbitrary strings carried in the payload (not a Zenoh
+        // keyexpr), so any character is allowed: node-name-style keys plus
+        // slashes, dots, spaces, other punctuation and non-ASCII text.
         for key in [
             "a",
             "robot_state",
@@ -579,62 +561,20 @@ mod tests {
             "Node",
             "a-b-c",
             "node-1_v2",
+            "robot/state",
+            "a.b.c",
+            "a b",
+            "a*b",
+            "a$b",
+            "a#b",
+            "a?b",
+            "a@b",
+            "café",
+            "日本語",
         ] {
             DatastoreKey::try_from(key)
                 .unwrap_or_else(|e| panic!("`{key}` should be a valid datastore key: {e}"));
         }
-    }
-
-    #[test]
-    fn datastore_key_rejects_disallowed_characters() {
-        // Anything outside the node-name set is rejected, and the error names
-        // the first offending character: slashes, dots, whitespace, other
-        // punctuation, the old Zenoh wildcards/reserved chars, and non-ASCII.
-        let cases = [
-            ("a/b", '/'),
-            ("a.b", '.'),
-            ("a b", ' '),
-            ("a*b", '*'),
-            ("a$b", '$'),
-            ("a#b", '#'),
-            ("a?b", '?'),
-            ("a@b", '@'),
-            ("日本語", '日'),
-        ];
-        for (key, expected) in cases {
-            let err =
-                DatastoreKey::try_from(key).expect_err(&format!("`{key}` should be rejected"));
-            assert!(
-                matches!(err, DatastoreKeyError::ForbiddenCharacter { character, .. } if character == expected),
-                "`{key}` should fail with ForbiddenCharacter({expected:?}), got {err:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn datastore_key_reports_the_offending_character_and_position() {
-        let err = DatastoreKey::try_from("ok-bad/key").expect_err("`/` should be rejected");
-        assert_eq!(
-            err,
-            DatastoreKeyError::ForbiddenCharacter {
-                key: "ok-bad/key".to_owned(),
-                index: 6,
-                character: '/',
-            }
-        );
-
-        // The reported index is a byte offset, so it must account for the
-        // single-byte ASCII text preceding the first non-ASCII (and therefore
-        // disallowed) character (`café` puts `é` at byte 3).
-        let err = DatastoreKey::try_from("café").expect_err("non-ASCII should be rejected");
-        assert_eq!(
-            err,
-            DatastoreKeyError::ForbiddenCharacter {
-                key: "café".to_owned(),
-                index: 3,
-                character: 'é',
-            }
-        );
     }
 
     #[test]
@@ -646,9 +586,9 @@ mod tests {
     }
 
     #[test]
-    fn store_request_new_rejects_invalid_key() {
-        let err = DatastoreStoreRequest::new("a/*", b"v".to_vec(), "text/plain")
-            .expect_err("wildcard key should be rejected");
+    fn store_request_new_rejects_empty_key() {
+        let err = DatastoreStoreRequest::new("", b"v".to_vec(), "text/plain")
+            .expect_err("empty key should be rejected");
         assert!(
             matches!(err, crate::Error::InvalidDatastoreKey(_)),
             "expected InvalidDatastoreKey, got {err:?}"
@@ -656,9 +596,8 @@ mod tests {
     }
 
     #[test]
-    fn get_request_new_rejects_invalid_key() {
-        let err = DatastoreGetRequest::new("a/b?c")
-            .expect_err("reserved-character key should be rejected");
+    fn get_request_new_rejects_empty_key() {
+        let err = DatastoreGetRequest::new("").expect_err("empty key should be rejected");
         assert!(
             matches!(err, crate::Error::InvalidDatastoreKey(_)),
             "expected InvalidDatastoreKey, got {err:?}"
@@ -666,8 +605,8 @@ mod tests {
     }
 
     #[test]
-    fn remove_request_new_rejects_invalid_key() {
-        let err = DatastoreRemoveRequest::new("a$b").expect_err("`$` key should be rejected");
+    fn remove_request_new_rejects_empty_key() {
+        let err = DatastoreRemoveRequest::new("").expect_err("empty key should be rejected");
         assert!(
             matches!(err, crate::Error::InvalidDatastoreKey(_)),
             "expected InvalidDatastoreKey, got {err:?}"
@@ -675,21 +614,51 @@ mod tests {
     }
 
     #[test]
-    fn store_request_decode_rejects_invalid_wire_key() {
-        // Defense in depth: a peer that bypasses `new` and puts a wildcard key
-        // straight on the wire is still rejected at decode time.
+    fn store_request_round_trips_key_with_special_characters() {
+        // Keys are arbitrary strings, so slashes and other punctuation that a
+        // Zenoh keyexpr would reserve must round-trip unchanged.
+        let key = "robot/state.last?v=2";
+        let request =
+            DatastoreStoreRequest::new(key, b"v".to_vec(), "text/plain").expect("valid key");
+        let payload = request.encode().expect("encode");
+        let decoded = DatastoreStoreRequest::decode(payload.as_ref()).expect("decode");
+        assert_eq!(decoded.key.as_str(), key);
+    }
+
+    #[test]
+    fn get_request_round_trips_key_with_special_characters() {
+        let key = "robot/state.last?v=2";
+        let request = DatastoreGetRequest::new(key).expect("valid key");
+        let payload = request.encode().expect("encode");
+        let decoded = DatastoreGetRequest::decode(payload.as_ref()).expect("decode");
+        assert_eq!(decoded.key.as_str(), key);
+    }
+
+    #[test]
+    fn remove_request_round_trips_key_with_special_characters() {
+        let key = "robot/state.last?v=2";
+        let request = DatastoreRemoveRequest::new(key).expect("valid key");
+        let payload = request.encode().expect("encode");
+        let decoded = DatastoreRemoveRequest::decode(payload.as_ref()).expect("decode");
+        assert_eq!(decoded.key.as_str(), key);
+    }
+
+    #[test]
+    fn store_request_decode_rejects_empty_wire_key() {
+        // An empty key placed straight on the wire is still rejected at decode
+        // time; non-empty keys are accepted regardless of their characters.
         let mut builder = Builder::new_default();
         {
             let mut request =
                 builder.init_root::<datastore_capnp::datastore_store_request::Builder>();
-            request.set_key("a/**");
+            request.set_key("");
             request.set_value(b"v");
             request.set_encoding("text/plain");
         }
         let payload = encode_message(&builder).expect("encode raw request");
 
         let err = DatastoreStoreRequest::decode(payload.as_ref())
-            .expect_err("invalid wire key should be rejected at decode");
+            .expect_err("empty wire key should be rejected at decode");
         assert!(
             matches!(err, crate::Error::InvalidDatastoreKey(_)),
             "expected InvalidDatastoreKey, got {err:?}"
@@ -697,19 +666,17 @@ mod tests {
     }
 
     #[test]
-    fn get_request_decode_rejects_invalid_wire_key() {
-        // Defense in depth for the get path: a reserved character placed
-        // straight on the wire is rejected at decode time.
+    fn get_request_decode_rejects_empty_wire_key() {
         let mut builder = Builder::new_default();
         {
             let mut request =
                 builder.init_root::<datastore_capnp::datastore_get_request::Builder>();
-            request.set_key("a/b?c");
+            request.set_key("");
         }
         let payload = encode_message(&builder).expect("encode raw request");
 
         let err = DatastoreGetRequest::decode(payload.as_ref())
-            .expect_err("invalid wire key should be rejected at decode");
+            .expect_err("empty wire key should be rejected at decode");
         assert!(
             matches!(err, crate::Error::InvalidDatastoreKey(_)),
             "expected InvalidDatastoreKey, got {err:?}"
@@ -717,19 +684,17 @@ mod tests {
     }
 
     #[test]
-    fn remove_request_decode_rejects_invalid_wire_key() {
-        // Defense in depth for the remove path: a bare `$` placed straight on
-        // the wire is rejected at decode time.
+    fn remove_request_decode_rejects_empty_wire_key() {
         let mut builder = Builder::new_default();
         {
             let mut request =
                 builder.init_root::<datastore_capnp::datastore_remove_request::Builder>();
-            request.set_key("a$b");
+            request.set_key("");
         }
         let payload = encode_message(&builder).expect("encode raw request");
 
         let err = DatastoreRemoveRequest::decode(payload.as_ref())
-            .expect_err("invalid wire key should be rejected at decode");
+            .expect_err("empty wire key should be rejected at decode");
         assert!(
             matches!(err, crate::Error::InvalidDatastoreKey(_)),
             "expected InvalidDatastoreKey, got {err:?}"

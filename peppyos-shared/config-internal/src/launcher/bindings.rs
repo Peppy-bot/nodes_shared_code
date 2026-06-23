@@ -306,13 +306,15 @@ fn check_stack_wide_instance_id_uniqueness(
         for instance in item.instances {
             let id = instance.instance_id.as_str();
             if let Some((name_a, tag_a)) = seen.get(id) {
-                if *name_a == item.node_name && *tag_a == item.node_tag {
-                    // Two instances of the same node-tag pair using the
-                    // same id is a separate (intra-deployment) check
-                    // performed by [`deserialize_instances`]. Skip here
-                    // to avoid double-reporting.
-                    continue;
-                }
+                // Report every cross-item duplicate, even when the two
+                // colliding entries share the same `(node_name,
+                // node_tag)`. `deserialize_instances` only dedupes
+                // within a single deployment's `instances` array, so two
+                // SEPARATE planned items carrying the same `(name, tag)`
+                // can each hold the same `instance_id` and slip past that
+                // check. If we skipped them here, `build_instance_lookup`
+                // would silently resolve the collision by first
+                // insertion, making `--bind KEY@id` ambiguous.
                 errors.push(ParsingError::DuplicateInstanceIdAcrossStack(Box::new(
                     DuplicateInstanceIdAcrossStack {
                         instance_id: id.to_string(),
@@ -1049,16 +1051,16 @@ mod tests {
         assert_eq!(info.tag_b, "v1");
     }
 
-    /// Stack-wide check doesn't double-report intra-group duplicates
-    /// (those are caught by the deserializer's
-    /// `deserialize_instances`).
+    /// Stack-wide check reports duplicate `instance_id`s even when the
+    /// colliding entries share the same `(name, tag)`. In real parsing
+    /// the deserializer's `deserialize_instances` rejects intra-array
+    /// duplicates before they reach the validator, but the validator
+    /// cannot distinguish that case from two separate planned items that
+    /// happen to share `(name, tag)`, so it reports defensively rather
+    /// than silently letting `build_instance_lookup` resolve by first
+    /// insertion.
     #[test]
-    fn rule7_does_not_double_report_intra_group_duplicates() {
-        // Two instances under the same (name, tag) sharing the same
-        // `instance_id` — would be rejected by the deserializer in real
-        // parsing, but if they slip through, this validator must hit
-        // the intra-group skip branch instead of reporting a stack-wide
-        // duplicate.
+    fn rule7_reports_duplicate_instance_id_even_for_same_name_tag() {
         let camera_instances = parse_instances(
             r#"[
                 { instance_id: "shared_inst" },
@@ -1067,7 +1069,18 @@ mod tests {
         );
         let items = vec![item("camera", "v1", &camera_instances, None)];
         let out = validate_bindings(&items, TEST_CORE);
-        assert!(out.errors.is_empty(), "unexpected errors: {:?}", out.errors);
+        assert_eq!(out.errors.len(), 1, "errors: {:?}", out.errors);
+        let ParsingError::DuplicateInstanceIdAcrossStack(info) = &out.errors[0] else {
+            panic!(
+                "expected DuplicateInstanceIdAcrossStack, got {:?}",
+                out.errors[0]
+            );
+        };
+        assert_eq!(info.instance_id, "shared_inst");
+        assert_eq!(info.name_a, "camera");
+        assert_eq!(info.tag_a, "v1");
+        assert_eq!(info.name_b, "camera");
+        assert_eq!(info.tag_b, "v1");
     }
 
     /// Pinned and from_any errors aggregate (no short-circuit).

@@ -38,9 +38,23 @@ pub struct PeppyInterface {
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub name: Name,
+    #[serde(deserialize_with = "deserialize_tag")]
     pub tag: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<Vec<String>>,
+}
+
+/// Enforce the repo-ID tag contract on the manifest tag at parse time, reusing
+/// the shared rules from `repo_node_id` so a `name`/`tag` pair from an interface
+/// document matches node dependencies the same way everywhere.
+fn deserialize_tag<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let tag = String::deserialize(deserializer)?;
+    crate::internal::repo_node_id::validate_repo_node_tag(&tag, "tag")
+        .map_err(de::Error::custom)?;
+    Ok(tag)
 }
 
 /// The body of an interface document. Each section is a flat list of items
@@ -348,6 +362,24 @@ mod tests {
             interfaces: {}
         }"#;
         assert!(serde_json5::from_str::<PeppyInterface>(json5).is_err());
+    }
+
+    /// The manifest tag must satisfy the same repo-ID rules as node
+    /// dependencies (`repo_node_id::validate_repo_node_tag`); a tag that does
+    /// not start with an ASCII letter is rejected at parse time.
+    #[test]
+    fn rejects_invalid_manifest_tag() {
+        let json5 = r#"{
+            peppy_schema: "interface_v1",
+            manifest: { name: "x", tag: "1bad" },
+            interfaces: {}
+        }"#;
+        let err = serde_json5::from_str::<PeppyInterface>(json5)
+            .expect_err("invalid tag must be rejected");
+        assert!(
+            err.to_string().contains("must start with an ASCII letter"),
+            "error: {err}"
+        );
     }
 
     #[test]

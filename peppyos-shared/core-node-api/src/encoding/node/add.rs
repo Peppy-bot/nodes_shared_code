@@ -71,6 +71,14 @@ impl NodeSource {
     pub fn decode_http(url_str: &str, sha256: Option<&str>) -> Result<Self> {
         let url = url::Url::parse(url_str)
             .map_err(|e| crate::Error::Decoding(format!("invalid HTTP URL: {}", e)))?;
+        match url.scheme() {
+            "http" | "https" => {}
+            scheme => {
+                return Err(crate::Error::Decoding(format!(
+                    "invalid HTTP URL: scheme must be http or https, got `{scheme}`"
+                )));
+            }
+        }
         Ok(Self::Http {
             url,
             sha256: Self::normalize_http_sha256(sha256),

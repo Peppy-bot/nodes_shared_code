@@ -34,7 +34,7 @@
     services: {
       exposes: [
         {
-          name: "enable_camera",
+          name: "enable_lidar",
           request_message_format: {
             enable: "bool",
           },
@@ -43,7 +43,7 @@
           },
         },
         {
-          name: "get_camera_info",
+          name: "get_lidar_info",
           response_message_format: {
             card_type: "string",
             size: "string",
