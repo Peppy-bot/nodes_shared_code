@@ -31,7 +31,7 @@ dirs = "6"
 const_format = "0.2"
 
 [build-dependencies]
-build-helpers = { path = "../../../peppyos/crates/build-helpers-internal" }
+build-helpers = { path = "../build-helpers-internal" }
 
 [dev-dependencies]
 

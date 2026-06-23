@@ -367,6 +367,7 @@ name = "build-helpers"
 version = "0.0.1"
 dependencies = [
  "sha2 0.11.0",
+ "tempfile",
 ]
 
 [[package]]

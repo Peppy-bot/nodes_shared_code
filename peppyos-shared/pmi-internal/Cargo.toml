@@ -27,7 +27,7 @@ tempfile = "3"
 zenoh = { version = "=1.9.0", optional = true }
 
 [build-dependencies]
-build-helpers = { path = "../../../peppyos/crates/build-helpers-internal" }
+build-helpers = { path = "../build-helpers-internal" }
 
 [dev-dependencies]
 tokio = { version = "1", features = [
