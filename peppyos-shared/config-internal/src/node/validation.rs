@@ -299,7 +299,7 @@ fn validate_consumed_interface(
             dependant_tag: dependant_tag.to_owned(),
             dependency: dep_name.clone(),
             dependency_tag: dep_tag.clone(),
-            interface_kind: kind.to_string(),
+            interface_kind: kind.label().to_owned(),
             interface_name: interface_name.to_owned(),
         })));
     }

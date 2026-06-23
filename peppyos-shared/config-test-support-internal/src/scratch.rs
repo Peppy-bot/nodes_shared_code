@@ -25,11 +25,10 @@ use std::time::Duration;
 /// reclaims leftovers older than [`STALE_TEST_TMP_AGE`]; that age floor keeps
 /// concurrently-running test binaries from deleting each other's live dirs.
 pub fn test_tmp_root() -> PathBuf {
-    let base =
-        match std::env::var_os(config::consts::PEPPY_HOME_ENV).filter(|v| !v.is_empty()) {
-            Some(home) => PathBuf::from(home),
-            None => PathBuf::from(std::env::var("HOME").expect("HOME must be set")).join(".peppy"),
-        };
+    let base = match std::env::var_os(config::consts::PEPPY_HOME_ENV).filter(|v| !v.is_empty()) {
+        Some(home) => PathBuf::from(home),
+        None => PathBuf::from(std::env::var("HOME").expect("HOME must be set")).join(".peppy"),
+    };
     let root = base.join("test-tmp");
     std::fs::create_dir_all(&root).expect("create test-tmp root");
 

@@ -179,6 +179,28 @@ pub enum InterfaceKind {
     Action,
 }
 
+impl InterfaceKind {
+    /// Capitalized noun for this kind (`"Topic"`, `"Service"`, `"Action"`),
+    /// used in user-facing error payloads such as [`MissingInterface`].
+    ///
+    /// [`MissingInterface`]: crate::MissingInterface
+    ///
+    /// This is intentionally distinct from [`Display`], which renders the
+    /// lowercase form that round-trips with [`FromStr`]. Do not replace call
+    /// sites with `to_string()`/`{:?}`: the former changes the casing and the
+    /// latter relies on the `Debug` derive matching the variant names.
+    ///
+    /// [`Display`]: std::fmt::Display
+    /// [`FromStr`]: std::str::FromStr
+    pub const fn label(&self) -> &'static str {
+        match self {
+            InterfaceKind::Topic => "Topic",
+            InterfaceKind::Service => "Service",
+            InterfaceKind::Action => "Action",
+        }
+    }
+}
+
 impl std::fmt::Display for InterfaceKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

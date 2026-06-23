@@ -1,4 +1,8 @@
-#[cfg(feature = "zenoh")]
+// The `build_zenoh` feature compiles the external zenohd daemon from source.
+// Everything here — including the `build-helpers` build-dependency — is gated on
+// that feature, so the common client/library/node builds (which only need
+// `zenoh`/`router`) get an empty `main()` and pull no build-dependency at all.
+#[cfg(feature = "build_zenoh")]
 mod zenoh_build {
     use std::env;
     use std::path::{Path, PathBuf};
@@ -137,50 +141,48 @@ mod zenoh_build {
         })
     }
 
-    pub fn build_zenoh(release_tag: &str) {
-        // Compile the zenoh router from source when the build_zenoh feature is
-        // enabled. Building the pinned version with `cargo install` keeps the
-        // router in lockstep with the `zenoh` library version resolved for this
-        // workspace, cached per machine/version/target like the other build
-        // tools, instead of fetching a separate prebuilt binary.
-        if env::var("CARGO_FEATURE_BUILD_ZENOH").is_ok() {
-            println!("cargo:rerun-if-changed=build.rs");
-            println!("cargo:rerun-if-changed=Cargo.toml");
+    fn build_zenoh(release_tag: &str) {
+        // Compile the zenoh router from source. Building the pinned version with
+        // `cargo install` keeps the router in lockstep with the `zenoh` library
+        // version resolved for this workspace, cached per machine/version/target
+        // like the other build tools, instead of fetching a separate prebuilt
+        // binary.
+        println!("cargo:rerun-if-changed=build.rs");
+        println!("cargo:rerun-if-changed=Cargo.toml");
 
-            // The pinned zenoh version is read from the resolved workspace
-            // lockfile, so rebuild zenohd when that lockfile changes too, not only
-            // when build.rs or Cargo.toml change.
-            let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
-            if let Some(lockfile_path) = find_cargo_lock(Path::new(&manifest_dir)) {
-                println!("cargo:rerun-if-changed={}", lockfile_path.display());
-            }
-
-            let target = env::var("TARGET").expect("TARGET not set");
-            let cache_dir = build_helpers::cache_dir("zenoh");
-
-            let out_dir = env::var("OUT_DIR").unwrap();
-            let zenoh_binary_path = format!("{}/zenohd", out_dir);
-
-            match build_helpers::cargo_install_binary("zenohd", release_tag, &target, &cache_dir) {
-                Some(compiled) => {
-                    build_helpers::copy_if_changed(&compiled, zenoh_binary_path.as_ref());
-                }
-                None => panic!(
-                    "Failed to compile zenohd {} for target '{}'. \
-                     Build zenohd from source with \
-                     `cargo build --release --target {}` \
-                     from the zenoh {} source tree, then place the built binary next to peppy \
-                     or point PEPPY_ZENOHD_PATH to it.",
-                    release_tag, target, target, release_tag
-                ),
-            }
-
-            // Ensure the binary is executable (std::fs::copy preserves the
-            // source's mode, but the cache may predate the executable bit).
-            build_helpers::set_executable(Path::new(&zenoh_binary_path));
-
-            println!("cargo:rustc-env=ZENOHD_BINARY_PATH={}", zenoh_binary_path);
+        // The pinned zenoh version is read from the resolved workspace lockfile,
+        // so rebuild zenohd when that lockfile changes too, not only when
+        // build.rs or Cargo.toml change.
+        let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+        if let Some(lockfile_path) = find_cargo_lock(Path::new(&manifest_dir)) {
+            println!("cargo:rerun-if-changed={}", lockfile_path.display());
         }
+
+        let target = env::var("TARGET").expect("TARGET not set");
+        let cache_dir = build_helpers::cache_dir("zenoh");
+
+        let out_dir = env::var("OUT_DIR").unwrap();
+        let zenoh_binary_path = format!("{}/zenohd", out_dir);
+
+        match build_helpers::cargo_install_binary("zenohd", release_tag, &target, &cache_dir) {
+            Some(compiled) => {
+                build_helpers::copy_if_changed(&compiled, zenoh_binary_path.as_ref());
+            }
+            None => panic!(
+                "Failed to compile zenohd {} for target '{}'. \
+                 Build zenohd from source with \
+                 `cargo build --release --target {}` \
+                 from the zenoh {} source tree, then place the built binary next to peppy \
+                 or point PEPPY_ZENOHD_PATH to it.",
+                release_tag, target, target, release_tag
+            ),
+        }
+
+        // Ensure the binary is executable (std::fs::copy preserves the
+        // source's mode, but the cache may predate the executable bit).
+        build_helpers::set_executable(Path::new(&zenoh_binary_path));
+
+        println!("cargo:rustc-env=ZENOHD_BINARY_PATH={}", zenoh_binary_path);
     }
 
     pub fn run() {
@@ -189,6 +191,6 @@ mod zenoh_build {
 }
 
 fn main() {
-    #[cfg(feature = "zenoh")]
+    #[cfg(feature = "build_zenoh")]
     zenoh_build::run();
 }
