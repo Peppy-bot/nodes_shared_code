@@ -238,7 +238,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         // Pre-populating the `{name}-{version}-{target}` cache key must
         // short-circuit the install; this pins the filename contract that
-        // pmi-internal and generator-internal build scripts rely on. The
+        // peppy-messaging-interface and generator-internal build scripts rely on. The
         // missing cargo program makes a fast-path regression fail fast
         // instead of invoking the real cargo against the network.
         let cached = dir.path().join("mytool-1.0.0-x86_64-unknown-linux-gnu");

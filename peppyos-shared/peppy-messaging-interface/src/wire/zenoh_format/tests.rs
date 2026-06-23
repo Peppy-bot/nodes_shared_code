@@ -1,7 +1,7 @@
 //! Snapshot tests for the zenoh wire format functions. These pin the exact
 //! keyexpr strings produced for every (role × variant) combination — if a
 //! change shifts the bytes, the test catches it. Roundtrip tests against a
-//! real router live in `crates/pmi-internal/tests/wire.rs`.
+//! real router live in `peppy-messaging-interface/tests/wire.rs`.
 
 use super::*;
 use crate::wire::{Segment, SenderTarget};

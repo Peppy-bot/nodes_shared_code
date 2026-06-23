@@ -54,7 +54,7 @@ pub enum Error {
     #[error(transparent)]
     SerdeJson5(#[from] serde_json5::Error),
 
-    // -- pmi-internal
+    // -- peppy-messaging-interface
     #[error(transparent)]
     PeppyMessagingInterface(#[from] pmi::PeppyMessagingInterfaceError),
 

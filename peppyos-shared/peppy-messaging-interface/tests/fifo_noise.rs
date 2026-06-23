@@ -202,7 +202,7 @@ async fn wildcard_service_call_emits_no_fifo_errors() {
          wildcard service call with a late-replying sibling producer, but \
          observed {count}. This usually means one of the adapter's zenoh \
          integration points (`call_service`, `subscribe_keyexpr`, \
-         `listen_service` in `crates/pmi-internal/src/adapters/zenoh.rs`) \
+         `listen_service` in `peppy-messaging-interface/src/adapters/zenoh.rs`) \
          was reverted from the callback handler back to the default FIFO \
          handler — re-introducing log spam on every wildcard discovery."
     );

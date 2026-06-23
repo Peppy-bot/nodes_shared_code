@@ -4252,7 +4252,7 @@ async fn pinned_calls_issue_zero_probes() {
                     return;
                 };
                 // `[0x03 magic, kind]`: 0x00 = UserRequest, 0x01 = Probe
-                // (crates/pmi-internal/src/wire/zenoh_format.rs).
+                // (peppy-messaging-interface/src/wire/zenoh_format.rs).
                 match query.attachment().map(|a| a.to_bytes()).as_deref() {
                     Some([0x03, 0x00]) => {
                         user_requests.fetch_add(1, Ordering::SeqCst);

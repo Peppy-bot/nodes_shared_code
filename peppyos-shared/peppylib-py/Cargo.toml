@@ -15,7 +15,7 @@ bytes = "1"
 config = { path = "../config-internal" }
 # core-node-api now lives here in peppyos-shared; local sibling path.
 core-node-api = { path = "../core-node-api" }
-pmi = { path = "../pmi-internal", features = ["zenoh", "build_zenoh"] }
+pmi = { path = "../peppy-messaging-interface", features = ["zenoh", "build_zenoh"] }
 # peppylib lives here in peppyos-shared now (package `peppylib-rs`, lib `peppylib`).
 peppylib = { package = "peppylib-rs", path = "../peppylib-rs" }
 pythonize = { version = "0.29" }
