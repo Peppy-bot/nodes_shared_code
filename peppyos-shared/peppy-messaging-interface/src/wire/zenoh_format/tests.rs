@@ -457,8 +457,8 @@ fn parse_inbound_query_accepts_wildcard_in_target_slots_and_link_id() {
     // A `from_any` consumer's selector wildcards the to_core/to_inst slots
     // and the link_id slot with Zenoh `*`. The producer-side parser
     // surfaces the `*` at the link_id slot so the adapter's dispatcher can
-    // claim a bound link_id; the to_core/to_inst slots are ignored here
-    // because Zenoh keyexpr matching has already routed the query.
+    // claim a bound link_id; wildcard target slots remain acceptable to
+    // every producer that Zenoh matched.
     let receiver = sample_service_receiver(ServiceKind::Service);
     let query = "*/caller_core/*/caller_inst/service/node/robot_arm/v1/*/ping";
     let parsed =
@@ -470,6 +470,38 @@ fn parse_inbound_query_accepts_wildcard_in_target_slots_and_link_id() {
         parsed.link_id, "*",
         "from_any consumer's selector should surface `*` at the link_id slot"
     );
+}
+
+#[test]
+fn parse_inbound_query_rejects_concrete_target_core_mismatch() {
+    let receiver = sample_service_receiver(ServiceKind::Service);
+    let query = "other_core/caller_core/server_inst/caller_inst/service/node/robot_arm/v1/_/ping";
+    let err =
+        ZenohWireFormat::parse_inbound_query(&receiver, query, &user_request_attachment_bytes())
+            .unwrap_err();
+    assert!(matches!(
+        err,
+        ZenohWireParseError::TargetSlotMismatch {
+            field: "target_core_node",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn parse_inbound_query_rejects_concrete_target_instance_mismatch() {
+    let receiver = sample_service_receiver(ServiceKind::Service);
+    let query = "server_core/caller_core/other_inst/caller_inst/service/node/robot_arm/v1/_/ping";
+    let err =
+        ZenohWireFormat::parse_inbound_query(&receiver, query, &user_request_attachment_bytes())
+            .unwrap_err();
+    assert!(matches!(
+        err,
+        ZenohWireParseError::TargetSlotMismatch {
+            field: "target_instance_id",
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -551,7 +583,7 @@ fn parse_inbound_query_rejects_discriminator_mismatch() {
 #[test]
 fn parse_inbound_query_rejects_too_short() {
     let receiver = sample_service_receiver(ServiceKind::Service);
-    let query = "only/two/segments";
+    let query = "server_core/caller_core/server_inst";
     let err =
         ZenohWireFormat::parse_inbound_query(&receiver, query, &user_request_attachment_bytes())
             .unwrap_err();

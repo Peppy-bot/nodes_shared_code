@@ -185,19 +185,31 @@ impl ZenohWireFormat {
     ) -> Result<ParsedInboundQuery, ZenohWireParseError> {
         let mut parts = query_keyexpr.split('/').filter(|s| !s.is_empty());
 
-        // Segment 0 is the consumer's `to_core` slot (may be a literal or `*`);
-        // ignored here because the queryable's listen keyexpr already filtered
-        // on it via Zenoh's matcher.
-        let _to_core = parts
+        // Segment 0 is the consumer's `to_core` slot. Re-check it here even
+        // though Zenoh should have already matched it against the queryable:
+        // during fresh peer startup we have observed pinned selectors briefly
+        // delivered to sibling queryables. Dropping mismatched concrete target
+        // slots here prevents a wrong producer instance from accepting a goal.
+        let to_core = parts
             .next()
             .ok_or(ZenohWireParseError::MissingSegment("target_core_node"))?;
+        reject_target_mismatch(
+            "target_core_node",
+            to_core,
+            receiver.bound_core_node.as_str(),
+        )?;
         let caller_core = parts
             .next()
             .ok_or(ZenohWireParseError::MissingSegment("caller_core_node"))?
             .to_string();
-        let _to_inst = parts
+        let to_inst = parts
             .next()
             .ok_or(ZenohWireParseError::MissingSegment("to_instance"))?;
+        reject_target_mismatch(
+            "target_instance_id",
+            to_inst,
+            receiver.as_instance_id.as_str(),
+        )?;
         let caller_inst = parts
             .next()
             .ok_or(ZenohWireParseError::MissingSegment("caller_instance"))?
@@ -362,6 +374,21 @@ fn action_root(target: &SenderTarget, link_id: &str, action: &str) -> String {
         target.name(),
         target.tag(),
     )
+}
+
+fn reject_target_mismatch(
+    field: &'static str,
+    got: &str,
+    expected: &str,
+) -> Result<(), ZenohWireParseError> {
+    if got == SINGLE_CHUNK_WILDCARD || got == expected {
+        return Ok(());
+    }
+    Err(ZenohWireParseError::TargetSlotMismatch {
+        field,
+        expected: expected.to_string(),
+        got: got.to_string(),
+    })
 }
 
 // ─── Parsed envelopes returned to the adapter ────────────────────────────
@@ -586,9 +613,9 @@ impl ParsedInboundQuery {
     /// returns the literal the producer should claim (always
     /// [`DEFAULT_LINK_ID`]). Wildcard `*` and the literal `_` both succeed;
     /// anything else returns `None` so the adapter drops the query without
-    /// replying. Unreachable in practice because Zenoh's keyexpr matcher
-    /// already filtered the selector against the producer's queryable, but
-    /// kept as a defensive guard against mid-rollout schema skew.
+    /// replying. Zenoh's keyexpr matcher should already filter the selector
+    /// against the producer's queryable, but this stays as a second guard
+    /// against stale routing views and mid-rollout schema skew.
     pub(crate) fn claim(&self) -> Option<&'static str> {
         match self.link_id.as_str() {
             SINGLE_CHUNK_WILDCARD | DEFAULT_LINK_ID => Some(DEFAULT_LINK_ID),
@@ -605,6 +632,11 @@ impl ParsedInboundQuery {
 pub(crate) enum ZenohWireParseError {
     MissingSegment(&'static str),
     WildcardInCallerSegment(&'static str),
+    TargetSlotMismatch {
+        field: &'static str,
+        expected: String,
+        got: String,
+    },
     ServiceRootMismatch {
         expected: String,
         got: String,
@@ -638,6 +670,14 @@ impl fmt::Display for ZenohWireParseError {
             Self::WildcardInCallerSegment(segment) => write!(
                 f,
                 "caller segment `{segment}` must not be the single-chunk wildcard `*`"
+            ),
+            Self::TargetSlotMismatch {
+                field,
+                expected,
+                got,
+            } => write!(
+                f,
+                "target slot `{field}` mismatch: expected `{expected}` or `*`, got `{got}`"
             ),
             Self::ServiceRootMismatch { expected, got } => write!(
                 f,

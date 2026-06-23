@@ -33,6 +33,7 @@
 
 #![forbid(unsafe_code)]
 
+mod capnp_generated;
 pub mod encoding;
 pub mod error;
 pub mod graph;
@@ -46,43 +47,10 @@ pub use graph::{
 };
 pub use payload::{EmptyPayloadError, NonEmptyPayload, Payload};
 
-// Generated Cap'n Proto types - must be at crate root for correct path resolution
-#[allow(clippy::all)]
-pub(crate) mod ping_capnp {
-    include!(concat!(env!("OUT_DIR"), "/ping_capnp.rs"));
-}
-
-#[allow(clippy::all)]
-pub(crate) mod clock_capnp {
-    include!(concat!(env!("OUT_DIR"), "/clock_capnp.rs"));
-}
-
-#[allow(clippy::all)]
-pub(crate) mod info_capnp {
-    include!(concat!(env!("OUT_DIR"), "/info_capnp.rs"));
-}
-
-#[allow(clippy::all)]
-pub(crate) mod launch_capnp {
-    include!(concat!(env!("OUT_DIR"), "/launch_capnp.rs"));
-}
-
-#[allow(clippy::all)]
-pub(crate) mod benchmark_capnp {
-    include!(concat!(env!("OUT_DIR"), "/benchmark_capnp.rs"));
-}
-
-#[allow(clippy::all)]
-pub(crate) mod node_capnp {
-    include!(concat!(env!("OUT_DIR"), "/node_capnp.rs"));
-}
-
-#[allow(clippy::all)]
-pub(crate) mod repo_capnp {
-    include!(concat!(env!("OUT_DIR"), "/repo_capnp.rs"));
-}
-
-#[allow(clippy::all)]
-pub(crate) mod datastore_capnp {
-    include!(concat!(env!("OUT_DIR"), "/datastore_capnp.rs"));
-}
+// The generated Cap'n Proto modules must be reachable at the crate root as
+// `crate::*_capnp` because capnpc emits crate-root-relative paths. They live in
+// `capnp_generated`; re-export them here so those paths resolve.
+pub(crate) use capnp_generated::{
+    benchmark_capnp, clock_capnp, datastore_capnp, info_capnp, launch_capnp, node_capnp,
+    ping_capnp, repo_capnp,
+};

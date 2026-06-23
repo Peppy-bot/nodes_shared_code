@@ -1043,12 +1043,11 @@ impl ZenohAdapter {
 /// [`ResponseToken::Zenoh`] (carrying the concrete reply keyexpr) and pushes
 /// it onto `tx`.
 ///
-/// Probe / ACK semantics are handled by peppylib's request loop, not here —
-/// every claimed query (including probes) is delivered to peppylib via
-/// `tx`, and peppylib decides whether to reply inline or hand the request
-/// to the user handler. Queries whose link_id slot is neither `*` nor `_`
-/// are dropped silently (defensive — Zenoh's matcher should already have
-/// filtered them out).
+/// The parser also re-validates concrete target core / instance slots against
+/// this receiver. That is defensive: Zenoh's matcher should already have
+/// filtered them out, but a stale peer-routing view must not let a pinned
+/// action goal run on a sibling instance. Queries whose link_id slot is neither
+/// `*` nor `_` are dropped silently for the same reason.
 ///
 /// This runs inside zenoh's reception callback, so the function is sync —
 /// `flume::Sender::send` blocks the zenoh worker thread when the buffer is
