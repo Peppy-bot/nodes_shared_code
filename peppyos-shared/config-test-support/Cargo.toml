@@ -12,7 +12,7 @@ edition.workspace = true
 [dependencies]
 # Public API only: `consts::{NODE_CONFIG_FILE, PEPPY_HOME_ENV}`. No dependency
 # cycle — `config`'s own tests do not use these fixtures.
-config = { path = "../config" }
+config = { package = "peppy-config-model", path = "../peppy-config-model" }
 # git2 (→ libgit2) and askama back the git-repo + node-config-template fixtures;
 # gated so the always-on `assert_contains_all`/`test_tmp_root` helpers stay pure-std.
 git2 = { version = "0.21", optional = true }

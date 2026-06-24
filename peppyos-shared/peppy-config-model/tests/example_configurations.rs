@@ -12,9 +12,9 @@
 //! duplicated here so this workspace stays self-contained and never reaches back
 //! into `peppyos/`.
 
-use config::consts::NODE_CONFIG_FILE;
-use config::launcher::PeppyLauncherParser;
-use config::node::NodeConfigParser;
+use peppy_config_model::consts::NODE_CONFIG_FILE;
+use peppy_config_model::launcher::PeppyLauncherParser;
+use peppy_config_model::node::NodeConfigParser;
 use std::path::{Path, PathBuf};
 
 /// Walk `root` recursively and collect every file named `peppy.json5`.

@@ -1,5 +1,5 @@
 [package]
-name = "config"
+name = "peppy-config-model"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true

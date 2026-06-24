@@ -16,20 +16,20 @@ fn main() {
     // config/tools holds the bundled capnp binaries. It lives in two
     // places depending on how peppylib is being built:
     //   1. Deployed flat cache (`.peppy/libs/<hash>/peppylib`): config is
-    //      a flat sibling, so `../config/tools`.
+    //      a flat sibling, so `../peppy-config-model/tools`.
     //   2. Superproject dev checkout (`nodes_shared_code/peppyos-shared/peppylib-rs`):
     //      config stays in the peppyos submodule, reached via the reverse
     //      path `../../../peppyos/crates/config/tools`.
     // manifest_dir is canonicalized above, so the deployed crate dir resolves to
     // the real shared-cache path (leaf "peppylib"); the dev crate dir leaf is
     // "peppylib-rs". Both candidates are evaluated against that canonical base.
-    let sibling_tools = manifest_dir.parent().unwrap().join("config").join("tools");
+    let sibling_tools = manifest_dir.parent().unwrap().join("peppy-config-model").join("tools");
     let reverse_tools = manifest_dir.join("../../../peppyos/crates/config/tools");
     let tools_dir = [sibling_tools, reverse_tools]
         .into_iter()
         .find(|candidate| candidate.exists())
         .expect(
-            "Could not locate config/tools (capnp binaries) as a flat \
+            "Could not locate peppy-config-model/tools (capnp binaries) as a flat \
              sibling or via the peppyos reverse path",
         );
     let capnp_path = build_helpers::find_bundled_capnp(&tools_dir).expect(
