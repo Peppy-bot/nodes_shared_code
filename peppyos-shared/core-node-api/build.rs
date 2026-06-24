@@ -23,7 +23,11 @@ fn main() {
     //      path `../../../peppyos/crates/config/tools`.
     // manifest_dir is canonicalized above, so the deployed crate dir resolves to the
     // real shared-cache path; both candidates are evaluated against that canonical base.
-    let sibling_tools = manifest_dir.parent().unwrap().join("peppy-config-model").join("tools");
+    let sibling_tools = manifest_dir
+        .parent()
+        .unwrap()
+        .join("peppy-config-model")
+        .join("tools");
     let reverse_tools = manifest_dir.join("../../../peppyos/crates/config/tools");
     let tools_dir = [sibling_tools, reverse_tools]
         .into_iter()
