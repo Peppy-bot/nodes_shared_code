@@ -913,6 +913,7 @@ mod zenoh_tests {
             port,
             true,
             SubscriberBufferSizes::default(),
+            Vec::new(),
             None,
         )
         .unwrap();

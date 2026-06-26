@@ -185,6 +185,14 @@ impl ZenohAdapter {
     /// the daemon session's own routing model (peer vs router-relay) and
     /// `buffer_sizes` its subscriber channel capacities, both resolved from
     /// `peppy_config.json5`.
+    ///
+    /// `connect_endpoints` *federates* the spawned router to upstream routers it
+    /// dials (`<proto>/<host>:<port>` each) — e.g. the daemon's plaintext loopback
+    /// router dialing a remote `tls/` router so the two zenohd routers join one
+    /// network. Empty is a standalone router (today's behavior). The connect-side
+    /// trust for a `tls/` upstream rides in `tls` (a [`TlsConfig::client`]); it is
+    /// written into the zenohd config only and is inert for the daemon's own
+    /// plaintext loopback session.
     #[cfg(feature = "router")]
     pub fn with_router(
         protocol: ZenohNetProtocol,
@@ -192,9 +200,11 @@ impl ZenohAdapter {
         port: u16,
         gossip: bool,
         buffer_sizes: SubscriberBufferSizes,
+        connect_endpoints: Vec<String>,
         tls: Option<TlsConfig>,
     ) -> Result<Self> {
-        let zenohd_config_path = zenohd::router_config_path(protocol, host, port, tls.clone())?;
+        let zenohd_config_path =
+            zenohd::router_config_path(protocol, host, port, connect_endpoints, tls.clone())?;
         let facade = zenohd::ZenohdFacade::new(zenohd_config_path)?;
         let client_config =
             Self::derive_client_config_from_zenohd(&facade, gossip, buffer_sizes, tls)?;
@@ -205,6 +215,31 @@ impl ZenohAdapter {
             session: None,
             reconnect_session: false,
         })
+    }
+
+    /// Re-renders the owned router's zenohd config file *in place* with new
+    /// federation `connect_endpoints` (+ connect-side `tls`) — same protocol /
+    /// host / port as it was spawned with, only the upstream connect block (and
+    /// its TLS trust) change. The new config takes effect on the next
+    /// `stop_router` / `start_router`; this call does not itself restart zenohd.
+    ///
+    /// Used by the daemon to (de)federate its local router to the user's per-user
+    /// cloud router when they log in / out, without a full daemon restart. A
+    /// `ZENOH_CONFIG`-overridden config is left untouched (operator-owned), in
+    /// which case re-rendering is a no-op. Errors if the adapter owns no router.
+    #[cfg(feature = "router")]
+    pub fn refederate(
+        &mut self,
+        connect_endpoints: Vec<String>,
+        tls: Option<TlsConfig>,
+    ) -> Result<()> {
+        let facade = self.zenohd.as_ref().ok_or_else(|| {
+            Error::BackendError("refederate called on an adapter that owns no router".to_string())
+        })?;
+        let ep = &facade.zenoh_endpoint;
+        // Rewrites the same port-keyed path the facade already reads on spawn.
+        zenohd::router_config_path(ep.protocol, &ep.host, ep.port, connect_endpoints, tls)?;
+        Ok(())
     }
 
     /// Creates a ZenohAdapter that joins the mesh seeded by an existing zenohd
@@ -225,13 +260,18 @@ impl ZenohAdapter {
 
     /// Like [`connect_to`](Self::connect_to) but over TLS: opens a `tls/`
     /// **client** session to `host:port`, verifying the router against `tls`'s
-    /// `root_ca_certificate` (with `verify_name_on_connect`). Used by the CLI to
-    /// reach a per-user cloud router. Unlike `connect_to`, this is **client**
-    /// mode (`gossip = false`): all traffic routes through the router and the
-    /// session binds no loopback peer listener — which is what we want for a
-    /// remote router (a peer listener would also need its own server cert, which
-    /// a pure client has no reason to hold). Use
+    /// `root_ca_certificate` (with `verify_name_on_connect`). Unlike `connect_to`,
+    /// this is **client** mode (`gossip = false`): all traffic routes through the
+    /// router and the session binds no loopback peer listener — which is what we
+    /// want for a remote router (a peer listener would also need its own server
+    /// cert, which a pure client has no reason to hold). Use
     /// [`connect_to_with_discovery`](Self::connect_to_with_discovery) for control.
+    ///
+    /// This is the low-level TLS-client primitive: it is what the `tls/` transport
+    /// tests dial a router with, and is available for a direct client→router
+    /// session. The peppy daemon does **not** use it to reach the per-user cloud
+    /// router — that is router-to-router federation (the local zenohd dials the
+    /// remote over a `tls/` `connect` endpoint; see [`Self::with_router`]).
     pub fn connect_to_tls(host: &str, port: u16, tls: TlsConfig) -> Result<Self> {
         Self::connect_to_with_discovery(
             ZenohNetProtocol::Tls,
@@ -335,6 +375,7 @@ impl ZenohAdapter {
                 port,
                 gossip,
                 buffer_sizes,
+                Vec::new(),
                 None,
             )?;
             // A lightweight client probe (no listener, no peer discovery) is the
@@ -1267,5 +1308,63 @@ mod tests {
         assert!(!cfg.gossip);
         assert_eq!(cfg.buffer_sizes.standard, 64);
         assert_eq!(cfg.buffer_sizes.high_throughput, 4096);
+    }
+
+    /// `refederate` re-renders the router's config in place with the upstream
+    /// connect endpoint + connect-side trust — the live (de)federation the daemon
+    /// drives on login/logout. `with_router` only renders + reads config (no
+    /// zenohd process), so this is a pure file check.
+    #[cfg(feature = "router")]
+    #[test]
+    fn refederate_rewrites_the_router_config_with_the_upstream_and_trust() {
+        // A port unlikely to collide with other config-rendering tests (the
+        // rendered config path is keyed by port).
+        let port = 59247;
+        let mut adapter = ZenohAdapter::with_router(
+            ZenohNetProtocol::Tcp,
+            "127.0.0.1",
+            port,
+            false,
+            SubscriberBufferSizes::default(),
+            Vec::new(),
+            None,
+        )
+        .expect("build standalone router adapter");
+
+        let cfg_path = adapter
+            .zenohd
+            .as_ref()
+            .expect("router adapter owns a facade")
+            .zenohd_config_path
+            .clone();
+        let before = std::fs::read_to_string(&cfg_path).expect("read rendered config");
+        assert!(
+            !before.contains("tls/cap.zenoh.localhost:7443"),
+            "a standalone router has no upstream connect endpoint"
+        );
+
+        adapter
+            .refederate(
+                vec!["tls/cap.zenoh.localhost:7443".to_string()],
+                Some(TlsConfig::client(std::path::PathBuf::from("/certs/ca.pem"))),
+            )
+            .expect("refederate rewrites the config in place");
+
+        let after = std::fs::read_to_string(&cfg_path).expect("read refederated config");
+        assert!(
+            after.contains("tls/cap.zenoh.localhost:7443"),
+            "upstream connect endpoint is now present"
+        );
+        assert!(
+            after.contains("/certs/ca.pem"),
+            "connect-side CA trust is now present"
+        );
+
+        // refederate on an adapter that owns no router (a client) is an error.
+        let mut clientish = ZenohAdapter::connect_to(ZenohNetProtocol::Tcp, "127.0.0.1", port)
+            .expect("build client adapter");
+        assert!(clientish.refederate(Vec::new(), None).is_err());
+
+        let _ = std::fs::remove_file(&cfg_path);
     }
 }

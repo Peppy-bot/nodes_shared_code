@@ -872,6 +872,25 @@ impl Messenger {
         }
     }
 
+    /// Re-renders the owned router's zenohd config in place with new federation
+    /// `connect_endpoints` (+ connect-side `tls`). The change takes effect on the
+    /// next [`stop_router`](MessengerBackend::stop_router) /
+    /// [`start_router`](MessengerBackend::start_router) cycle — callers re-render
+    /// then restart. Lets the daemon (de)federate its local router to the user's
+    /// per-user cloud router live (login/logout) without a full process restart.
+    /// A no-op for the mock backend. See [`crate::ZenohAdapter::refederate`].
+    #[cfg(feature = "router")]
+    pub fn refederate(
+        &mut self,
+        connect_endpoints: Vec<String>,
+        tls: Option<crate::zenoh_config::TlsConfig>,
+    ) -> Result<()> {
+        match &mut self.adapter {
+            MessengerAdapter::Zenoh(adapter) => adapter.refederate(connect_endpoints, tls),
+            MessengerAdapter::Mock(_) => Ok(()),
+        }
+    }
+
     /// Pre-bind a per-topic publisher. The returned [`MessengerPublisher`]
     /// publishes to the same wire keyexpr as [`MessengerBackend::publish_topic`]
     /// for the same `sender`, but skips the central `Arc<Mutex<Messenger>>`

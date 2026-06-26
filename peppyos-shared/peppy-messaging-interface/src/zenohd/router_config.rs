@@ -10,12 +10,16 @@ use std::path::PathBuf;
 
 /// Resolves the zenohd router config path. Honors a `ZENOH_CONFIG` override;
 /// otherwise renders a router config to a temp file keyed by messaging port and
-/// returns its path. `tls` (when the protocol is `Tls`) carries the listener's
-/// certificate/key; `None` renders a plaintext listener unchanged.
+/// returns its path. `tls` (when the protocol is `Tls`, or when a `tls/`
+/// `connect_endpoint` is present) carries the listener's certificate/key and/or
+/// the connect-side trust root; `None` renders a plaintext listener unchanged.
+/// `connect_endpoints` federates this router to those upstream routers (empty for
+/// a standalone router); see [`crate::zenoh_config::router_spec`].
 pub(crate) fn router_config_path(
     protocol: ZenohNetProtocol,
     host: &str,
     messaging_port: u16,
+    connect_endpoints: Vec<String>,
     tls: Option<TlsConfig>,
 ) -> Result<PathBuf> {
     if let Ok(config_path) = std::env::var("ZENOH_CONFIG") {
@@ -28,8 +32,14 @@ pub(crate) fn router_config_path(
     // multicast is off everywhere (see `crate::zenoh_config`). The router listens
     // on `host` as given (typically `0.0.0.0`) so nodes can reach it. Shares
     // `router_spec` with the out-of-process render path (`render_router_config`).
-    let config_content =
-        render_config_string(&router_spec(protocol, host, messaging_port, true, tls));
+    let config_content = render_config_string(&router_spec(
+        protocol,
+        host,
+        messaging_port,
+        true,
+        connect_endpoints,
+        tls,
+    ));
 
     std::fs::write(&config_path, config_content)
         .map_err(|e| Error::ConfigurationError(format!("Failed to write zenohd config: {}", e)))?;

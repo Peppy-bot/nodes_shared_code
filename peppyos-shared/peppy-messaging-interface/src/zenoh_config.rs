@@ -247,18 +247,28 @@ pub(crate) fn render_probe_config(
 /// out-of-process render path ([`render_router_config`]) so both produce an
 /// identical router config. `gossip` seeds the peer mesh (the daemon wants it on;
 /// an isolated per-user router wants it off so routers cannot mesh).
+///
+/// `connect_endpoints` makes this router *federate* to other zenohd routers it
+/// dials (`<proto>/<host>:<port>` each) — distinct from gossip, which is peer
+/// auto-discovery. Empty is the standalone router (today's behavior); a non-empty
+/// list (e.g. the daemon's local router dialing a remote `tls/` router) turns the
+/// retry/keep-alive on (`reconnect`) so an unreachable or restarted upstream is
+/// recovered transparently and never stops the local router serving its own
+/// nodes. The connect-side TLS for that link rides in `tls` (a
+/// [`TlsConfig::client`]); it is ignored on a plaintext listen endpoint.
 pub(crate) fn router_spec(
     protocol: ZenohNetProtocol,
     host: &str,
     port: u16,
     gossip: bool,
+    connect_endpoints: Vec<String>,
     tls: Option<TlsConfig>,
 ) -> ZenohConfigSpec {
     ZenohConfigSpec {
         mode: SessionMode::Router,
-        connect_endpoints: Vec::new(),
+        reconnect: !connect_endpoints.is_empty(),
+        connect_endpoints,
         listen_endpoints: vec![format!("{protocol}/{host}:{port}")],
-        reconnect: false,
         gossip,
         tls,
     }
@@ -267,17 +277,27 @@ pub(crate) fn router_spec(
 /// Renders a zenohd router config to a JSON5 string, for callers that run the
 /// router out of process (e.g. a container) rather than spawning it via
 /// [`crate::ZenohAdapter::with_router`]. With `protocol = Tls` and a server
-/// [`TlsConfig`] this emits the `transport.link.tls` listener block. Available
-/// under the base `zenoh` feature (no `router`/zenohd binary needed) because
-/// rendering a config is independent of spawning a process.
+/// [`TlsConfig`] this emits the `transport.link.tls` listener block; a non-empty
+/// `connect_endpoints` emits a `connect` block so the router federates to those
+/// upstreams (see [`router_spec`]). Available under the base `zenoh` feature (no
+/// `router`/zenohd binary needed) because rendering a config is independent of
+/// spawning a process.
 pub fn render_router_config(
     protocol: ZenohNetProtocol,
     host: &str,
     port: u16,
     gossip: bool,
+    connect_endpoints: Vec<String>,
     tls: Option<TlsConfig>,
 ) -> String {
-    render_config_string(&router_spec(protocol, host, port, gossip, tls))
+    render_config_string(&router_spec(
+        protocol,
+        host,
+        port,
+        gossip,
+        connect_endpoints,
+        tls,
+    ))
 }
 
 /// The loopback ephemeral listen endpoint a peer binds. Loopback-only by design:
@@ -434,6 +454,7 @@ mod tests {
             "0.0.0.0",
             7447,
             false,
+            Vec::new(),
             Some(TlsConfig::server(
                 PathBuf::from("/certs/leaf.pem"),
                 PathBuf::from("/certs/leaf.key"),
@@ -443,6 +464,8 @@ mod tests {
 
         // The endpoint scheme is `tls/`, driven by the protocol's Display.
         assert_eq!(cfg["listen"]["endpoints"]["router"][0], "tls/0.0.0.0:7447");
+        // A standalone (non-federated) router never dials out.
+        assert!(cfg.get("connect").is_none());
         let tls = &cfg["transport"]["link"]["tls"];
         assert_eq!(tls["listen_certificate"], "/certs/leaf.pem");
         assert_eq!(tls["listen_private_key"], "/certs/leaf.key");
@@ -481,6 +504,7 @@ mod tests {
             "0.0.0.0",
             7447,
             false,
+            Vec::new(),
             Some(TlsConfig::server(
                 PathBuf::from("/certs/leaf.pem"),
                 PathBuf::from("/certs/leaf.key"),
@@ -488,5 +512,44 @@ mod tests {
         );
         zenoh::config::Config::from_json5(&s).expect("rendered tls router config parses");
         assert!(s.contains("tls/0.0.0.0:7447"));
+    }
+
+    #[test]
+    fn federated_router_config_emits_connect_block_and_connect_tls() {
+        // The daemon's local router: a plaintext `tcp/` listener for its own
+        // nodes, PLUS a `tls/` connect endpoint federating it to a remote router,
+        // trusting that router via a client CA. This is the peppyos-side shape of
+        // the per-user-router design.
+        let s = render_router_config(
+            ZenohNetProtocol::Tcp,
+            "0.0.0.0",
+            7448,
+            true,
+            vec!["tls/cap.zenoh.localhost:7443".to_string()],
+            Some(TlsConfig::client(PathBuf::from("/certs/ca.pem"))),
+        );
+        let cfg: serde_json::Value =
+            serde_json::from_str(&s).expect("rendered federated router config is JSON");
+
+        assert_eq!(cfg["mode"], "router");
+        // Local nodes still reach the router over plaintext loopback/LAN.
+        assert_eq!(cfg["listen"]["endpoints"]["router"][0], "tcp/0.0.0.0:7448");
+        // It federates out to the remote router over TLS, and keeps retrying so a
+        // remote restart/reprovision is recovered (reconnect ⇒ `timeout_ms: -1`).
+        assert_eq!(
+            cfg["connect"]["endpoints"][0],
+            "tls/cap.zenoh.localhost:7443"
+        );
+        assert_eq!(cfg["connect"]["timeout_ms"], -1);
+        assert_eq!(cfg["connect"]["exit_on_failure"], false);
+        // Connect-side trust only (verify the remote router's cert); no listener
+        // identity, since the local listener is plaintext.
+        let tls = &cfg["transport"]["link"]["tls"];
+        assert_eq!(tls["root_ca_certificate"], "/certs/ca.pem");
+        assert_eq!(tls["verify_name_on_connect"], true);
+        assert!(tls.get("listen_certificate").is_none());
+
+        // And the whole thing is a config zenoh accepts.
+        zenoh::config::Config::from_json5(&s).expect("federated router config parses");
     }
 }
