@@ -5,6 +5,7 @@ mod topics;
 
 pub(crate) use iface::{PyProducerRef, PySenderTarget};
 
+use config::org::resolve_session_namespace;
 use peppylib::PeppyError;
 use peppylib::messaging::MessengerHandle;
 use pmi::{MessengerBackend, ZenohAdapter, ZenohdInstance};
@@ -190,6 +191,31 @@ impl PyMessengerHandle {
             let handle = MessengerHandle::from_host_port(&host, port)
                 .await
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+            Ok(PyMessengerHandle { inner: handle })
+        })
+    }
+
+    /// Connect under an organization namespace (org-id routing isolation),
+    /// mirroring `MessengerHandle::from_host_port_with_namespace`. `org_id` of
+    /// `None` resolves to the `local` namespace — the same logged-out default
+    /// the node runtime resolves to — so a standalone control/stub session
+    /// opens under the runner's namespace and actually routes to it.
+    #[staticmethod]
+    #[pyo3(signature = (host, port, org_id=None))]
+    fn from_host_port_with_namespace<'py>(
+        py: Python<'py>,
+        host: String,
+        port: u16,
+        org_id: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        crate::py_future::future_into_py(py, async move {
+            let namespace = resolve_session_namespace(org_id.as_deref());
+            let handle =
+                MessengerHandle::from_host_port_with_namespace(&host, port, Some(namespace))
+                    .await
+                    .map_err(|e| {
+                        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
+                    })?;
             Ok(PyMessengerHandle { inner: handle })
         })
     }

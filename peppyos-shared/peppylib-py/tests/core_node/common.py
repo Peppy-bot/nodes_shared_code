@@ -69,7 +69,15 @@ async def start_router_and_runner(tmp_path: Path):
     the messaging fabric.
     """
     router = await ZenohdInstance.start_ephemeral("127.0.0.1")
-    server_handle = await MessengerHandle.from_host_port(router.host, router.port)
+    # The node runner opens its session under an org namespace; the standalone
+    # config carries no organization id, so it resolves to the `local`
+    # namespace. The stub server must open under that same namespace — zenoh
+    # sessions only interoperate when their namespaces match — or the runner's
+    # service queries and topic subscriptions never reach the stub. Passing no
+    # org id resolves to `local`, matching the runner.
+    server_handle = await MessengerHandle.from_host_port_with_namespace(
+        router.host, router.port
+    )
 
     peppy_config_path = write_standalone_peppy_config(tmp_path)
     standalone_config = (

@@ -14,7 +14,7 @@ use peppylib::messaging::{
 };
 use peppylib::runtime::{NodeRunner, Processor, StandaloneConfig};
 use peppylib::types::Payload;
-use pmi::{ZenohAdapter, ZenohdInstance};
+use pmi::{OrgNamespace, ZenohAdapter, ZenohdInstance};
 use tempfile::TempDir;
 
 pub(crate) const CORE_NODE: &str = "standalone-core";
@@ -134,9 +134,19 @@ pub(crate) async fn start_router_and_runner()
     let router = ZenohAdapter::start_router_ephemeral("127.0.0.1", None)
         .await
         .expect("start zenoh router");
-    let server = MessengerHandle::from_host_port(&router.host, router.port)
-        .await
-        .expect("server handle");
+    // The node runner opens its session under an org namespace
+    // (`from_host_port_reconnecting_with_discovery`); the standalone config
+    // carries no organization id, so it resolves to the `local` namespace. The
+    // stub server must open under that same namespace — zenoh sessions only
+    // interoperate when their namespaces match — or the runner's service
+    // queries and topic subscriptions never reach the stub.
+    let server = MessengerHandle::from_host_port_with_namespace(
+        &router.host,
+        router.port,
+        Some(OrgNamespace::local()),
+    )
+    .await
+    .expect("server handle");
 
     let temp_dir = TempDir::new().expect("temp dir should be created");
     let peppy_config_path = write_standalone_peppy_config(&temp_dir);
