@@ -1,9 +1,10 @@
 //! The crate's error type.
 
-/// A failure building an SRS arm / FK model from a URDF. The distinct
-/// [`UrdfRead`](Self::UrdfRead) variant lets a caller tell a missing/unreadable
-/// file from a URDF that parsed but is not a usable SRS arm; the latter share the
-/// [`Model`](Self::Model) catch-all, since they carry an opaque reason.
+/// A failure building an SRS arm / FK model from a URDF.
+/// [`UrdfRead`](Self::UrdfRead) is a missing or unreadable file;
+/// [`NotSrsArm`](Self::NotSrsArm) is a chain that parsed but is not a clean 7-DOF
+/// SRS arm; other opaque parse/model failures use the [`Model`](Self::Model)
+/// catch-all.
 #[derive(Debug, thiserror::Error)]
 pub enum SrsError {
     /// The URDF file could not be read from disk.

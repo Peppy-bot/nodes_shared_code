@@ -537,10 +537,12 @@ impl BimanualCollisionModel {
         if norm < WITNESS_MIN_SEPARATION {
             return Err(CollisionError::WitnessesCoincide { distance: c.distance });
         }
-        // Unit normal along the witness separation. d grows when body a's witness
-        // moves along +normal and shrinks when body b's does, so a carries +1 and b
-        // carries -1. Each witness moves only its own arm; a world-fixed witness
-        // (torso) contributes nothing.
+        // Unit normal along the witness separation (points a -> b). Each witness
+        // moves only its own arm; a world-fixed witness (torso) contributes nothing.
+        // The per-body signs below (+1 on a, -1 on b) are the convention that makes
+        // the projected witness velocities sum to d(distance)/dq; the result is
+        // checked against central differences in
+        // `distance_gradient_matches_finite_difference`.
         let normal = separation / norm;
         let (place_a, place_b) = (self.bodies[c.a].placement, self.bodies[c.b].placement);
         let (left_a, right_a) = self.gradient_contribution(place_a, &c.on_a, &normal, 1.0, q_left, q_right);
@@ -560,9 +562,9 @@ impl BimanualCollisionModel {
 
     /// One body's contribution to the per-arm distance gradient: the witness
     /// `normal` projected through the witness `point`'s velocity Jacobian, on the
-    /// arm the body belongs to. `sign` is +1 for body a (distance grows as it moves
-    /// along the normal) and -1 for body b. A world-fixed body (torso) contributes
-    /// nothing on either arm.
+    /// arm the body belongs to. `sign` is +1 for body a's witness and -1 for body
+    /// b's (the convention that yields d(distance)/dq; see `distance_gradient` and
+    /// its finite-difference test). A world-fixed body (torso) contributes nothing.
     fn gradient_contribution(
         &mut self,
         placement: Placement,
