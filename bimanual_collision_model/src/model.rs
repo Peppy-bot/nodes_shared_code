@@ -9,10 +9,10 @@
 //! The checked pairs are derived at construction from the URDF: every body
 //! pair except those that cannot inform (two fixed bodies never change
 //! distance) or that touch by construction (URDF-adjacent, joint-yoked bodies).
-//! The hulls are tight, so no rebasing is needed: instead every checked pair is
-//! required to read at least the band's `d_safe` at each declared reference
-//! pose, or construction fails loudly. A reference that is actually a near-miss
-//! is the caller's error to fix, not a margin to paper over.
+//! The hulls are tight: the reported distance is the true surface clearance, with
+//! no safety margin baked into the geometry. Keeping the arms apart is the
+//! caller's job (a deployment band over the reported distance), not a margin the
+//! model papers over.
 
 use std::collections::HashMap;
 
@@ -231,8 +231,9 @@ impl Builder {
 impl BimanualCollisionModel {
     /// Start building a model from a URDF string and its collision mesh
     /// directory, naming the two chain base links. See [`Builder`]. The model is
-    /// a pure distance oracle: it reports clearances, and the caller decides what
-    /// to do with them (see [`GovernorBand`](crate::GovernorBand)).
+    /// a pure distance oracle: it reports clearances (and, via
+    /// [`distance_gradient`](Self::distance_gradient), their gradient), and the
+    /// caller decides how to throttle on them.
     pub fn builder(urdf: &str, meshes_dir: &str, left_base: &str, right_base: &str) -> Builder {
         Builder {
             urdf: urdf.to_string(),
@@ -667,17 +668,10 @@ fn ensure_finite(q_left: &JointVec, q_right: &JointVec) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::GovernorBand;
     use crate::pairs::PairSpec;
 
     const URDF: &str = include_str!("../tests/fixtures/openarm_v10.urdf");
     const MESHES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/meshes");
-
-    // The band the governor-law test gates with; d_safe 20 mm clears the rest
-    // pose comfortably (closest pair ~33 mm).
-    fn band() -> GovernorBand {
-        GovernorBand::new(0.005, 0.02).expect("valid band")
-    }
 
     fn model() -> BimanualCollisionModel {
         BimanualCollisionModel::builder(URDF, MESHES, "openarm_left_link0", "openarm_right_link0")
@@ -1008,10 +1002,10 @@ mod tests {
     }
 
     #[test]
-    fn separating_motion_always_passes_even_from_overlap() {
-        // The criterion: from a colliding pose, moving apart is full speed;
-        // moving deeper is throttled. EPA's continuous signed distance is what
-        // lets the band tell the two apart inside an overlap.
+    fn epa_gives_continuous_signed_distance_through_overlap() {
+        // EPA recovers penetration depth as a continuous signed distance: a more
+        // deeply wrapped pose reads more negative than a shallower one, so a caller
+        // can tell approaching from separating even from inside an overlap.
         let mut m = model();
         let deep = m
             .min_distance(
@@ -1030,16 +1024,6 @@ mod tests {
         assert!(
             deep < 0.0 && shallow > deep,
             "deep {deep:+.4} shallow {shallow:+.4}"
-        );
-        let band = band();
-        assert_eq!(
-            band.scale(deep, shallow),
-            1.0,
-            "separating from overlap must pass at full speed"
-        );
-        assert!(
-            band.scale(shallow, deep) < 1.0,
-            "approaching into overlap must throttle"
         );
     }
 
