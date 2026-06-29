@@ -38,10 +38,11 @@ impl Arm {
     }
 
     /// Pose the arm at configuration `q` for forward-kinematics and dynamics
-    /// reads. Takes `&mut self` because posing updates the chain in place; the
-    /// returned [`Posed`] borrows it so reads (EE pose, gravity, Coriolis) always
-    /// follow a pose. See [`Posed::ee_pose`], [`Posed::gravity_torques`],
-    /// [`Posed::coriolis_torques`].
+    /// reads. Takes `&mut self` not because posing requires it (`k` poses through
+    /// interior mutability) but to enforce "pose, then read": the returned [`Posed`]
+    /// holds exclusive access for its lifetime, so reads (EE pose, gravity, Coriolis)
+    /// always follow a pose and never race a re-pose. See [`Posed::ee_pose`],
+    /// [`Posed::gravity_torques`], [`Posed::coriolis_torques`].
     pub fn at(&mut self, q: &JointVec) -> Posed<'_> {
         self.fk.at(q)
     }

@@ -152,12 +152,12 @@ impl ForwardKinematics {
         })
     }
 
-    /// Pose the chain at `q` and return a read-only view of it. Posing needs
-    /// `&mut` (the `k` chain mutates in place), but the returned [`Posed`] is the
-    /// only way to read the chain, so a configuration is always applied before any
-    /// accessor runs, and the `&mut` borrow is held for the view's lifetime so no
-    /// read can race a re-pose. "Pose, then read" is thus a type invariant, not a
-    /// calling convention.
+    /// Pose the chain at `q` and return a read-only view of it. `k`'s posing API is
+    /// itself `&self` (the chain caches transforms through interior mutability), so
+    /// the `&mut` here is deliberate, not a `k` requirement: it gives the returned
+    /// [`Posed`] exclusive access for its lifetime, making "pose, then read" a
+    /// type-enforced invariant (no accessor runs before a pose, and no re-pose can
+    /// race a read), not just a calling convention.
     pub fn at(&mut self, q: &JointVec) -> Posed<'_> {
         self.chain.set_joint_positions_unchecked(q);
         self.chain.update_transforms();
