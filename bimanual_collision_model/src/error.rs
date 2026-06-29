@@ -91,3 +91,11 @@ impl From<String> for BuildError {
         BuildError::Geometry(reason)
     }
 }
+
+/// Building the per-arm `srs_model` chains is part of assembly; fold its error
+/// into the geometry catch-all.
+impl From<srs_model::SrsError> for BuildError {
+    fn from(source: srs_model::SrsError) -> Self {
+        BuildError::Geometry(source.to_string())
+    }
+}

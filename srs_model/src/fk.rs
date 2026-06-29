@@ -15,6 +15,8 @@
 use k::nalgebra::{Isometry3, Matrix3, Point3, Vector3};
 use k::{Chain, JointType, Node, SerialChain};
 
+use crate::SrsError;
+
 use crate::payload::Payload;
 use crate::{ARM_DOF, JointVec, Limit};
 
@@ -45,7 +47,7 @@ impl ForwardKinematics {
     /// Everything past the wrist (gripper, fingers, tools) becomes the distal
     /// payload. Agnostic to *which* 7-DOF SRS arm: any URDF + base link the
     /// caller passes (it is not a general N-DOF or non-SRS solver).
-    pub fn from_urdf(urdf: &str, base_link: &str) -> Result<Self, String> {
+    pub fn from_urdf(urdf: &str, base_link: &str) -> Result<Self, SrsError> {
         let robot = urdf_rs::read_from_string(urdf).map_err(|e| format!("parse URDF: {e}"))?;
         Self::from_chain(Chain::<f64>::from(robot), base_link)
     }
@@ -53,8 +55,9 @@ impl ForwardKinematics {
     /// Like [`from_urdf`](Self::from_urdf) but reads the URDF from a file path,
     /// folding the IO error into the same `Result` so callers need not handle the
     /// read separately.
-    pub fn from_urdf_file(path: &str, base_link: &str) -> Result<Self, String> {
-        let urdf = std::fs::read_to_string(path).map_err(|e| format!("read urdf '{path}': {e}"))?;
+    pub fn from_urdf_file(path: &str, base_link: &str) -> Result<Self, SrsError> {
+        let urdf = std::fs::read_to_string(path)
+            .map_err(|source| SrsError::UrdfRead { path: path.to_string(), source })?;
         Self::from_urdf(&urdf, base_link)
     }
 
@@ -75,7 +78,7 @@ impl ForwardKinematics {
         })
     }
 
-    fn from_chain(full: Chain<f64>, base_link: &str) -> Result<Self, String> {
+    fn from_chain(full: Chain<f64>, base_link: &str) -> Result<Self, SrsError> {
         let base = full
             .find_link(base_link)
             .ok_or_else(|| format!("URDF missing base link '{base_link}'"))?
@@ -311,7 +314,7 @@ impl Posed<'_> {
 /// to a revolute joint; a fixed sensor branch or the (prismatic) gripper is
 /// skipped, and a genuine fork (two revolute branches) is rejected as not a
 /// single SRS arm.
-fn find_srs_tip(base: &Node<f64>) -> Result<Node<f64>, String> {
+fn find_srs_tip(base: &Node<f64>) -> Result<Node<f64>, SrsError> {
     let mut node = base.clone();
     let mut revolute = 0;
     while revolute < ARM_DOF {
@@ -322,16 +325,16 @@ fn find_srs_tip(base: &Node<f64>) -> Result<Node<f64>, String> {
         node = match arm.len() {
             1 => arm.pop().unwrap(),
             0 => {
-                return Err(format!(
+                return Err(SrsError::NotSrsArm(format!(
                     "chain from base reaches only {revolute} revolute joints; \
                      a 7-DOF SRS arm needs {ARM_DOF}"
-                ));
+                )));
             }
             n => {
-                return Err(format!(
+                return Err(SrsError::NotSrsArm(format!(
                     "ambiguous arm: {n} revolute-bearing branches share one link; \
                      not a single SRS chain"
-                ));
+                )));
             }
         };
         if matches!(node.joint().joint_type, JointType::Rotational { .. }) {
@@ -358,17 +361,17 @@ fn subtree_has_revolute(node: &Node<f64>) -> bool {
 /// path) is rejected: it would otherwise pass the revolute count below while
 /// `base_from_world` is frozen at home, silently building the wrong model
 /// instead of returning `Err`.
-fn collect_revolute_nodes(chain: &SerialChain<f64>) -> Result<[Node<f64>; ARM_DOF], String> {
+fn collect_revolute_nodes(chain: &SerialChain<f64>) -> Result<[Node<f64>; ARM_DOF], SrsError> {
     if let Some(extra) = chain.iter().find(|n| {
         !matches!(
             n.joint().joint_type,
             JointType::Fixed | JointType::Rotational { .. }
         )
     }) {
-        return Err(format!(
+        return Err(SrsError::NotSrsArm(format!(
             "SRS chain has a non-revolute movable joint '{}': not a 7-DOF revolute arm",
             extra.joint().name
-        ));
+        )));
     }
     let nodes: Vec<Node<f64>> = chain
         .iter()
@@ -376,10 +379,10 @@ fn collect_revolute_nodes(chain: &SerialChain<f64>) -> Result<[Node<f64>; ARM_DO
         .cloned()
         .collect();
     nodes.try_into().map_err(|v: Vec<_>| {
-        format!(
+        SrsError::NotSrsArm(format!(
             "expected {ARM_DOF} revolute joints in the SRS chain, got {}",
             v.len()
-        )
+        ))
     })
 }
 
@@ -528,6 +531,6 @@ mod tests {
             Ok(_) => panic!("expected Err for a prismatic joint"),
             Err(e) => e,
         };
-        assert!(err.contains("revolute"), "unexpected error: {err}");
+        assert!(matches!(&err, SrsError::NotSrsArm(_)), "unexpected error: {err}");
     }
 }

@@ -219,7 +219,7 @@ fn mesh_wireframes(args: &Args) -> Result<Vec<serde_json::Value>, String> {
         (&args.left_base, &args.left),
         (&args.right_base, &args.right),
     ] {
-        let mut arm = Arm::from_urdf_file(&args.urdf, base)?;
+        let mut arm = Arm::from_urdf_file(&args.urdf, base).map_err(|e| e.to_string())?;
         let posed = arm.at(q);
         for i in 0..ARM_DOF {
             let name = posed.link_name(i);
