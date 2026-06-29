@@ -57,7 +57,19 @@ impl OrgNamespace {
     /// Parse and validate a candidate namespace (an organization id or the local
     /// constant). Rejects anything zenoh would not accept as a non-wild key
     /// expression so the value can never poison a live session.
+    ///
+    /// A namespace must be a *single* chunk: zenoh prepends `<ns>/` on egress and
+    /// strips it chunk-by-chunk on ingress, so a multi-chunk value like `a/b`
+    /// would collide with namespace `a` + key `b/...` and break org isolation. A
+    /// UUID and the `local` constant contain no `/`, so this never rejects a
+    /// legitimate id.
     pub fn parse(s: &str) -> Result<Self, InvalidOrgNamespace> {
+        if s.contains('/') {
+            return Err(InvalidOrgNamespace {
+                value: s.to_owned(),
+                message: "namespace must be a single chunk (must not contain '/')".to_owned(),
+            });
+        }
         match OwnedNonWildKeyExpr::try_from(s.to_owned()) {
             Ok(_) => Ok(Self(s.to_owned())),
             Err(err) => Err(InvalidOrgNamespace {
@@ -98,11 +110,12 @@ pub fn resolve_session_namespace(raw: Option<&str>) -> OrgNamespace {
 }
 
 /// The single source of the federation gate. Fail-closed: only a present, valid
-/// organization id federates. An absent id (logged out) or an invalid one keeps
-/// the router standalone, so an unprefixed/`local` session can never reach the
-/// shared multi-tenant router.
+/// organization id that is not the local namespace federates. An absent id
+/// (logged out), an invalid one, or the literal `local` keeps the router
+/// standalone, so an unprefixed/`local` session can never reach the shared
+/// multi-tenant router.
 pub fn should_federate(raw: Option<&str>) -> bool {
-    matches!(raw, Some(s) if OrgNamespace::parse(s).is_ok())
+    matches!(raw, Some(s) if s != LOCAL_NAMESPACE && OrgNamespace::parse(s).is_ok())
 }
 
 #[cfg(test)]
@@ -112,16 +125,23 @@ mod tests {
     const UUID: &str = "550e8400-e29b-41d4-a716-446655440000";
 
     #[test]
-    fn parse_accepts_uuid_local_and_multi_chunk() {
+    fn parse_accepts_uuid_and_local() {
         assert!(
             OrgNamespace::parse(UUID).is_ok(),
             "hyphenated UUID must parse"
         );
         assert!(OrgNamespace::parse(LOCAL_NAMESPACE).is_ok());
-        assert!(
-            OrgNamespace::parse("a/b").is_ok(),
-            "multi-chunk keyexpr allowed"
-        );
+    }
+
+    #[test]
+    fn parse_rejects_multi_chunk() {
+        for bad in ["a/b", "a/b/c"] {
+            assert!(
+                OrgNamespace::parse(bad).is_err(),
+                "{bad:?} must be rejected: a namespace is a single chunk \
+                 (multi-chunk collides once zenoh prepends the namespace)"
+            );
+        }
     }
 
     #[test]
@@ -160,6 +180,10 @@ mod tests {
         assert!(
             !should_federate(Some("**")),
             "an invalid org id never federates"
+        );
+        assert!(
+            !should_federate(Some(LOCAL_NAMESPACE)),
+            "the local namespace is valid but must never federate"
         );
         assert!(should_federate(Some(UUID)), "a valid org id federates");
     }

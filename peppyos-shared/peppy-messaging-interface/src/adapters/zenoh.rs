@@ -371,13 +371,25 @@ impl ZenohAdapter {
     /// to pick the session's gossip mode and buffer sizes.
     #[cfg(feature = "router")]
     pub async fn start_router_ephemeral(host: &str, port: Option<u16>) -> Result<ZenohdInstance> {
-        Self::start_router_ephemeral_in_mode(host, port, true, SubscriberBufferSizes::default())
-            .await
+        Self::start_router_ephemeral_in_mode(
+            host,
+            port,
+            true,
+            SubscriberBufferSizes::default(),
+            None,
+        )
+        .await
     }
 
     /// Like [`start_router_ephemeral`](Self::start_router_ephemeral) but the
     /// hosted session's `gossip` (peer vs router-relay) and subscriber buffer
     /// sizes are explicit. Used by tests to exercise both messaging modes.
+    ///
+    /// `namespace` stamps an organization namespace onto the hosted session
+    /// (the same `with_router(...).with_namespace(...)` pairing the daemon uses),
+    /// so a test that runs a core node off this session and spawns nodes under
+    /// that org id stays routing-consistent with them. `None` leaves the hosted
+    /// session namespace-free (the default for client-vs-client tests).
     ///
     /// When `port` is `None`, automatically selects an available port and retries
     /// up to 32 times if the port becomes unavailable. When `port` is `Some`,
@@ -390,6 +402,7 @@ impl ZenohAdapter {
         port: Option<u16>,
         gossip: bool,
         buffer_sizes: SubscriberBufferSizes,
+        namespace: Option<OrgNamespace>,
     ) -> Result<ZenohdInstance> {
         let max_attempts = if port.is_some() { 1 } else { 32 };
 
@@ -411,7 +424,8 @@ impl ZenohAdapter {
                 buffer_sizes,
                 Vec::new(),
                 None,
-            )?;
+            )?
+            .with_namespace(namespace.clone());
             // A lightweight client probe (no listener, no peer discovery) is the
             // cheapest reliable "router accepts sessions yet?" check.
             let probe_config = render_probe_config(ZenohNetProtocol::Tcp, host, port, None);
