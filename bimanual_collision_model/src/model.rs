@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use srs_model::nalgebra::{Isometry3, Point3, Vector3};
 use srs_model::{ARM_DOF, Arm, JointVec};
 
+use crate::CollisionError;
 use crate::assemble::fit_bodies;
 use crate::gjk::{self, Hull, Placed};
 use crate::hull::ConvexPiece;
@@ -172,14 +173,15 @@ impl Builder {
 
     /// Fit the bodies (supplied pieces override the auto-fit), derive the checked
     /// pairs from the structural rules, and apply the exclusions.
-    pub fn build(self) -> Result<BimanualCollisionModel, String> {
+    pub fn build(self) -> Result<BimanualCollisionModel, CollisionError> {
         let mut model = BimanualCollisionModel::assemble(
             &self.urdf,
             &self.meshes_dir,
             &self.left_base,
             &self.right_base,
             &self.supplied,
-        )?;
+        )
+        .map_err(CollisionError::Build)?;
         // Candidate pairs: everything that can inform. Excluded structurally:
         // two world-fixed bodies (their distance never changes), and pairs within
         // two moving joints of each other, same-side or torso against a chain's
@@ -222,8 +224,8 @@ impl Builder {
                 }
             }
         }
-        model.set_pairs(&specs)?;
-        model.exclude_named(&self.exclude)?;
+        model.set_pairs(&specs).map_err(CollisionError::Build)?;
+        model.exclude_named(&self.exclude).map_err(CollisionError::Build)?;
         Ok(model)
     }
 }
@@ -251,8 +253,9 @@ impl BimanualCollisionModel {
         meshes_dir: &str,
         left_base: &str,
         right_base: &str,
-    ) -> Result<Builder, String> {
-        let urdf = std::fs::read_to_string(path).map_err(|e| format!("read urdf '{path}': {e}"))?;
+    ) -> Result<Builder, CollisionError> {
+        let urdf = std::fs::read_to_string(path)
+            .map_err(|e| CollisionError::Build(format!("read urdf '{path}': {e}")))?;
         Ok(Self::builder(&urdf, meshes_dir, left_base, right_base))
     }
 
@@ -445,7 +448,7 @@ impl BimanualCollisionModel {
     /// FK, then scans the pairs (broadphase-ordered) for the minimum signed
     /// distance. The shared core of [`min_distance`](Self::min_distance) and
     /// [`distance_gradient`](Self::distance_gradient).
-    fn closest(&mut self, q_left: &JointVec, q_right: &JointVec) -> Result<Closest, String> {
+    fn closest(&mut self, q_left: &JointVec, q_right: &JointVec) -> Result<Closest, CollisionError> {
         self.place(q_left, q_right);
 
         // Broadphase: a pair's bounding-sphere gap is a lower bound on its true
@@ -496,7 +499,7 @@ impl BimanualCollisionModel {
                 }
             }
         }
-        best.ok_or_else(|| "no pairs to check".into())
+        best.ok_or(CollisionError::NoPairs)
     }
 
     /// Minimum signed distance over all checked pairs at the given
@@ -506,7 +509,7 @@ impl BimanualCollisionModel {
         &mut self,
         q_left: &JointVec,
         q_right: &JointVec,
-    ) -> Result<Proximity<'_>, String> {
+    ) -> Result<Proximity<'_>, CollisionError> {
         ensure_finite(q_left, q_right)?;
         let c = self.closest(q_left, q_right)?;
         Ok(Proximity {
@@ -529,13 +532,13 @@ impl BimanualCollisionModel {
         &mut self,
         q_left: &JointVec,
         q_right: &JointVec,
-    ) -> Result<DistanceGradient<'_>, String> {
+    ) -> Result<DistanceGradient<'_>, CollisionError> {
         ensure_finite(q_left, q_right)?;
         let c = self.closest(q_left, q_right)?;
         let separation = c.on_b - c.on_a;
         let norm = separation.norm();
         if norm < WITNESS_MIN_SEPARATION {
-            return Err(format!("witnesses coincide (d={:+.4}); distance gradient undefined", c.distance));
+            return Err(CollisionError::WitnessesCoincide { distance: c.distance });
         }
         // Unit normal along the witness separation. d grows when body a's witness
         // moves along +normal and shrinks when body b's does, so a carries +1 and b
@@ -590,11 +593,9 @@ impl BimanualCollisionModel {
         q_left: &JointVec,
         q_right: &JointVec,
         threshold: f64,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, CollisionError> {
         if !threshold.is_finite() {
-            return Err(format!(
-                "collision threshold must be finite, got {threshold}"
-            ));
+            return Err(CollisionError::NonFinite);
         }
         Ok(self.min_distance(q_left, q_right)?.distance <= threshold)
     }
@@ -608,7 +609,7 @@ impl BimanualCollisionModel {
         &mut self,
         q_left: &JointVec,
         q_right: &JointVec,
-    ) -> Result<BodyPieces<'_>, String> {
+    ) -> Result<BodyPieces<'_>, CollisionError> {
         ensure_finite(q_left, q_right)?;
         self.place(q_left, q_right);
         Ok(self
@@ -658,9 +659,9 @@ fn link_poses(arm: &mut Arm, q: &JointVec) -> [Isometry3<f64>; ARM_DOF] {
 
 /// Reject NaN/inf joint values so queries fail safe instead of comparing
 /// against NaN downstream.
-fn ensure_finite(q_left: &JointVec, q_right: &JointVec) -> Result<(), String> {
+fn ensure_finite(q_left: &JointVec, q_right: &JointVec) -> Result<(), CollisionError> {
     if q_left.iter().chain(q_right).any(|x| !x.is_finite()) {
-        return Err("non-finite joint configuration".into());
+        return Err(CollisionError::NonFinite);
     }
     Ok(())
 }
@@ -771,7 +772,7 @@ mod tests {
         .build()
         .err()
         .expect("identical bases must fail");
-        assert!(e.contains("two chains"), "{e}");
+        assert!(e.to_string().contains("two chains"), "{e}");
     }
 
     #[test]
@@ -849,7 +850,7 @@ mod tests {
         .build()
         .err()
         .expect("a too-small hull must be rejected");
-        assert!(e.contains("do not contain"), "{e}");
+        assert!(e.to_string().contains("do not contain"), "{e}");
     }
 
     #[test]
@@ -864,7 +865,7 @@ mod tests {
         .build()
         .err()
         .expect("unknown body must fail");
-        assert!(e.contains("not a collision body"), "{e}");
+        assert!(e.to_string().contains("not a collision body"), "{e}");
     }
 
     #[test]
@@ -879,7 +880,7 @@ mod tests {
         .build()
         .err()
         .expect("empty pieces must fail");
-        assert!(e.contains("is empty"), "{e}");
+        assert!(e.to_string().contains("is empty"), "{e}");
     }
 
     #[test]
@@ -944,7 +945,7 @@ mod tests {
         }
     }
 
-    fn excluding(pairs: &[PairSpec]) -> Result<BimanualCollisionModel, String> {
+    fn excluding(pairs: &[PairSpec]) -> Result<BimanualCollisionModel, CollisionError> {
         BimanualCollisionModel::builder(URDF, MESHES, "openarm_left_link0", "openarm_right_link0")
             .exclude(pairs)
             .build()
@@ -980,7 +981,7 @@ mod tests {
         let e = excluding(&[PairSpec::new("openarm_left_link0", "no_such_link")])
             .err()
             .expect("unknown body must fail");
-        assert!(e.contains("unknown body"), "{e}");
+        assert!(e.to_string().contains("unknown body"), "{e}");
     }
 
     #[test]

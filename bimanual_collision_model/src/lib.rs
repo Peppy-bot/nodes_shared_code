@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 mod assemble;
+mod error;
 mod gjk;
 mod hull;
 mod model;
@@ -32,8 +33,9 @@ mod stl;
 // `urdf_collision` stays public: the `visualize` example loads meshes through it.
 pub mod urdf_collision;
 
+pub use error::CollisionError;
 pub use hull::ConvexPiece;
-pub use model::{BimanualCollisionModel, BodyPieces, Builder, PlacedPiece, Proximity};
+pub use model::{BimanualCollisionModel, BodyPieces, Builder, DistanceGradient, PlacedPiece, Proximity};
 pub use pairs::PairSpec;
 
 /// Re-export the linear-algebra types so downstream crates use the same

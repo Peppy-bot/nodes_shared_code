@@ -7,6 +7,7 @@ license = "Apache-2.0"
 
 [dependencies]
 srs_model = { path = "../srs_model" }
+thiserror = "2"
 urdf-rs = "0.9"
 
 [dev-dependencies]

@@ -114,7 +114,7 @@ fn parse_joints(s: &str) -> Result<JointVec, String> {
         .map_err(|v: Vec<f64>| format!("expected {ARM_DOF} joints, got {}", v.len()))
 }
 
-fn run() -> Result<(), String> {
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args()?;
     // The model is a pure distance oracle; the HUD colours by the caller's own
     // d_stop/d_safe (the --d-stop / --d-safe args), independent of any band.
