@@ -10,3 +10,12 @@
 mod pacer;
 
 pub use pacer::Pacer;
+
+use thiserror::Error;
+
+/// Errors from constructing or driving a control_core primitive.
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("pacer period must be non-zero")]
+    ZeroPacerPeriod,
+}

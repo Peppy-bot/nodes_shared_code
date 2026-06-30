@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 
 use tracing::warn;
 
+use crate::Error;
+
 /// How often [`Pacer`] reports accumulated overruns, so a chronically overloaded
 /// loop is loud in the log without flooding it at the control rate.
 const OVERRUN_REPORT_PERIOD: Duration = Duration::from_secs(1);
@@ -31,14 +33,20 @@ pub struct Pacer {
 }
 
 impl Pacer {
-    pub fn new(period: Duration) -> Self {
-        Self {
+    /// Create a pacer ticking at `period`, or [`Error::ZeroPacerPeriod`] if the
+    /// period is zero: a zero period makes every tick an overrun, so `pace()` would
+    /// spin without awaiting.
+    pub fn new(period: Duration) -> Result<Self, Error> {
+        if period.is_zero() {
+            return Err(Error::ZeroPacerPeriod);
+        }
+        Ok(Self {
             next_tick: tokio::time::Instant::now(),
             period,
             overruns: 0,
             worst_late: Duration::ZERO,
             last_report: Instant::now(),
-        }
+        })
     }
 
     /// Sleep until the next tick deadline, tallying an overrun (and re-anchoring)
@@ -97,6 +105,11 @@ mod tests {
             worst_late: Duration::ZERO,
             last_report: Instant::now(),
         }
+    }
+
+    #[test]
+    fn new_rejects_a_zero_period() {
+        assert!(matches!(Pacer::new(Duration::ZERO), Err(Error::ZeroPacerPeriod)));
     }
 
     #[test]
