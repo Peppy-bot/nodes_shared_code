@@ -29,10 +29,10 @@ async fn action_messenger_communication() {
     let feedback_payload = Payload::from_static(b"50% done");
     let result_payload = Payload::from_static(b"action result");
 
-    let server_handle = MessengerHandle::from_host_port(&host, port)
+    let server_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("failed to create server handle");
-    let client_handle = MessengerHandle::from_host_port(&host, port)
+    let client_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("failed to create client handle");
 
@@ -164,10 +164,10 @@ async fn setup_goal_handshake(
     node_name: &str,
     action_name: &str,
 ) -> (ActionFeedbackPublisher, ActionGoalHandle, ServerScaffold) {
-    let server_handle = MessengerHandle::from_host_port(host, port)
+    let server_handle = MessengerHandle::connect(host, port)
         .await
         .expect("failed to create server handle");
-    let client_handle = MessengerHandle::from_host_port(host, port)
+    let client_handle = MessengerHandle::connect(host, port)
         .await
         .expect("failed to create client handle");
 
@@ -388,10 +388,10 @@ async fn concurrent_action_two_goals_independent() {
     let node_name = "brain";
     let action_name = "move_arm";
 
-    let server_handle = MessengerHandle::from_host_port(&host, port)
+    let server_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("server handle");
-    let client_handle = MessengerHandle::from_host_port(&host, port)
+    let client_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("client handle");
 
@@ -495,10 +495,10 @@ async fn concurrent_action_cancel_targets_one_goal() {
     let node_name = "brain";
     let action_name = "move_arm";
 
-    let server_handle = MessengerHandle::from_host_port(&host, port)
+    let server_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("server handle");
-    let client_handle = MessengerHandle::from_host_port(&host, port)
+    let client_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("client handle");
 
@@ -596,10 +596,10 @@ async fn concurrent_action_reject_then_accept() {
     let node_name = "brain";
     let action_name = "move_arm";
 
-    let server_handle = MessengerHandle::from_host_port(&host, port)
+    let server_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("server handle");
-    let client_handle = MessengerHandle::from_host_port(&host, port)
+    let client_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("client handle");
 
@@ -684,10 +684,10 @@ async fn concurrent_action_abandoned_goal_yields_typed_abandoned() {
     let node_name = "brain";
     let action_name = "move_arm";
 
-    let server_handle = MessengerHandle::from_host_port(&host, port)
+    let server_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("server handle");
-    let client_handle = MessengerHandle::from_host_port(&host, port)
+    let client_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("client handle");
 
@@ -763,7 +763,7 @@ async fn concurrent_action_abandoned_goal_yields_typed_abandoned() {
 /// Python binding uses.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_action_producer_death_unblocks_feedback_and_yields_abandoned() {
-    use pmi::{Messenger, MessengerAdapter, MessengerBackend, ZenohNetProtocol};
+    use pmi::{Messenger, MessengerAdapter, MessengerBackend, OrgNamespace, ZenohNetProtocol};
 
     let instance = ZenohAdapter::start_router_ephemeral("127.0.0.1", None)
         .await
@@ -776,12 +776,19 @@ async fn concurrent_action_producer_death_unblocks_feedback_and_yields_abandoned
     let action_name = "move_arm";
 
     // The producer's messenger is built by hand (instead of
-    // `from_host_port`) so the test retains the `Arc` and can close the
+    // `MessengerHandle::connect`) so the test retains the `Arc` and can close the
     // session deterministically mid-goal — `stop_session` is the in-process
     // stand-in for hard process death: liveliness tokens are removed
     // identically on session close and on transport loss.
-    let producer_adapter =
-        ZenohAdapter::connect_to(ZenohNetProtocol::Tcp, &host, port).expect("producer adapter");
+    //
+    // The namespace must be stamped explicitly here: `MessengerHandle::connect`
+    // (which builds `client_handle` below) defaults the session to the `local`
+    // organization namespace, so the hand-built producer has to open under the
+    // same namespace or every keyexpr is prefix-mismatched and the goal query
+    // never reaches the server (surfacing as `ServiceUnreachable`).
+    let producer_adapter = ZenohAdapter::connect_to(ZenohNetProtocol::Tcp, &host, port)
+        .expect("producer adapter")
+        .with_namespace(Some(OrgNamespace::local()));
     let mut producer_messenger = Messenger::new(MessengerAdapter::Zenoh(producer_adapter));
     producer_messenger
         .start_session()
@@ -790,7 +797,7 @@ async fn concurrent_action_producer_death_unblocks_feedback_and_yields_abandoned
     let producer_messenger = Arc::new(tokio::sync::Mutex::new(producer_messenger));
     let server_handle = MessengerHandle::from_shared(Arc::clone(&producer_messenger));
 
-    let client_handle = MessengerHandle::from_host_port(&host, port)
+    let client_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("client handle");
 
@@ -928,10 +935,10 @@ async fn concurrent_action_result_parks_until_complete() {
     let node_name = "brain";
     let action_name = "move_arm";
 
-    let server_handle = MessengerHandle::from_host_port(&host, port)
+    let server_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("server handle");
-    let client_handle = MessengerHandle::from_host_port(&host, port)
+    let client_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("client handle");
 
@@ -1003,10 +1010,10 @@ async fn concurrent_action_multiple_polls_one_goal_all_resolve() {
     let node_name = "brain";
     let action_name = "move_arm";
 
-    let server_handle = MessengerHandle::from_host_port(&host, port)
+    let server_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("server handle");
-    let client_handle = MessengerHandle::from_host_port(&host, port)
+    let client_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("client handle");
 
@@ -1087,10 +1094,10 @@ async fn concurrent_action_completed_result_expires_after_grace() {
     let action_name = "move_arm";
     let grace = Duration::from_millis(500);
 
-    let server_handle = MessengerHandle::from_host_port(&host, port)
+    let server_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("server handle");
-    let client_handle = MessengerHandle::from_host_port(&host, port)
+    let client_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("client handle");
 
@@ -1189,10 +1196,10 @@ async fn concurrent_action_cancel_after_terminal_is_already_terminal() {
     let node_name = "brain";
     let action_name = "move_arm";
 
-    let server_handle = MessengerHandle::from_host_port(&host, port)
+    let server_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("server handle");
-    let client_handle = MessengerHandle::from_host_port(&host, port)
+    let client_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("client handle");
 
@@ -1273,13 +1280,13 @@ async fn action_iface_scoped_native_and_conformed_do_not_collide() {
     let native_response = Payload::from_static(b"native_ack");
     let iface_response = Payload::from_static(b"iface_ack");
 
-    let native_handle = MessengerHandle::from_host_port(&host, port)
+    let native_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("native handle");
-    let iface_handle = MessengerHandle::from_host_port(&host, port)
+    let iface_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("iface handle");
-    let caller_handle = MessengerHandle::from_host_port(&host, port)
+    let caller_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("caller handle");
 
@@ -1429,7 +1436,7 @@ async fn action_from_any_send_goal_runs_handler_on_winner_only() {
         ready: oneshot::Sender<()>,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> tokio::task::JoinHandle<()> {
-        let handle = MessengerHandle::from_host_port(&host, port)
+        let handle = MessengerHandle::connect(&host, port)
             .await
             .expect("connect");
         tokio::spawn(async move {
@@ -1505,7 +1512,7 @@ async fn action_from_any_send_goal_runs_handler_on_winner_only() {
     ready_a_rx.await.expect("producer A ready");
     ready_b_rx.await.expect("producer B ready");
 
-    let caller_handle = MessengerHandle::from_host_port(&host, port)
+    let caller_handle = MessengerHandle::connect(&host, port)
         .await
         .expect("caller connect");
 
