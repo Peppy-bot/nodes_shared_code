@@ -49,11 +49,16 @@ jobs:
       # Rust workspace tests. Exclude peppylib-py: its cdylib build and
       # tests/python_tests.rs only wrap `pixi run test`, which the dedicated
       # Python step below runs directly.
+      #
+      # `--locked` enforces the committed Cargo.lock. The lock is workspace-global,
+      # so this validates it against every member's manifest (peppylib-py included,
+      # despite its tests being excluded) and fails the build if the lock is stale —
+      # surfacing dependency drift in CI instead of silently re-resolving.
       - name: Run Rust tests
         working-directory: peppyos-shared
         run: |
           export PEPPY_HOME="$PEPPY_RUN_HOME" TMPDIR="$PEPPY_RUN_HOME/tmpdir"
-          cargo test --workspace --exclude peppylib-py
+          cargo test --workspace --exclude peppylib-py --locked
 
       # Python tests for the peppylib-py extension: `pixi run test` builds the
       # native module with `maturin develop` and runs the pytest suite. Requires
