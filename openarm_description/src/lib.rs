@@ -41,7 +41,6 @@ const MESHES: &[(&str, &[u8])] = &[
         include_bytes!("../assets/meshes/body_link0_symp.stl"),
     ),
     ("finger.stl", include_bytes!("../assets/meshes/finger.stl")),
-    ("hand.stl", include_bytes!("../assets/meshes/hand.stl")),
     (
         "link0_symp.stl",
         include_bytes!("../assets/meshes/link0_symp.stl"),
