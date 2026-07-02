@@ -5,8 +5,9 @@
 //! re-fit; `rest_pose_clearance_is_stable` is the deliberate exception, pinning the
 //! rest clearance as a regression guard (update its constant on an intended re-fit).
 
-use bimanual_collision_model::BimanualCollisionModel;
+use bimanual_collision_model::{BimanualCollisionModel, PlacedPiece};
 use srs_model::JointVec;
+use srs_model::nalgebra::{Point3, Vector3};
 
 #[path = "fixtures/openarm.rs"]
 mod openarm;
@@ -16,9 +17,9 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 /// In-limit home: the elbow's one-sided lower limit is 0.05.
 const HOME: JointVec = [0.0, 0.0, 0.0, 0.05, 0.0, 0.0, 0.0];
 
-/// The fixture model under the tight torso boxes we actually ship; the auto-fit
-/// torso hull bulges across the chest and clips the grippers at rest, so the
-/// integration scenarios run against the supplied proxy instead.
+/// The fixture model under the tight torso regions we actually ship; the
+/// auto-fit torso hull bulges across the chest and clips the grippers at rest,
+/// so the integration scenarios run against the supplied decomposition instead.
 fn model() -> BimanualCollisionModel {
     BimanualCollisionModel::builder_from_file(
         &format!("{FIXTURES}/openarm_v10.urdf"),
@@ -27,7 +28,7 @@ fn model() -> BimanualCollisionModel {
         "openarm_right_link0",
     )
     .expect("read fixture urdf")
-    .hulls(openarm::TORSO_BODY, openarm::torso())
+    .regions(openarm::TORSO_BODY, openarm::torso_regions())
     .build()
     .expect("fixture model")
 }
@@ -93,7 +94,7 @@ fn folding_the_arms_inward_drives_a_collision() {
 #[test]
 fn rest_pose_clearance_is_stable() {
     // The auto-fit torso bulges a phantom slab that reads a false near-contact
-    // against the grippers at rest; the tight shipped boxes leave the true
+    // against the grippers at rest; the tight shipped regions leave the true
     // clearance. Pinned to the measured value as a two-sided regression guard: a
     // re-fit that moves the rest clearance in either direction trips this, so update
     // the constant when the geometry deliberately changes.
@@ -182,6 +183,71 @@ fn non_finite_configurations_are_rejected() {
     assert!(m.min_distance(&HOME, &bad).is_err());
     bad[3] = f64::INFINITY;
     assert!(m.in_collision(&HOME, &bad, 0.0).is_err());
+}
+
+/// A conservative lower bound on the distance from `p` to a placed piece's
+/// rounded surface: the deepest face-plane violation of the core hull (each
+/// half-space distance under-estimates the hull distance) minus the inflation
+/// radius. Positive means provably outside the piece by at least that much.
+fn outside_by_at_least(piece: &PlacedPiece, p: &Point3<f64>) -> f64 {
+    let interior = Point3::from(
+        piece
+            .vertices
+            .iter()
+            .fold(Vector3::zeros(), |a, v| a + v.coords)
+            / piece.vertices.len() as f64,
+    );
+    piece
+        .faces
+        .iter()
+        .filter_map(|f| {
+            let (a, b, c) = (
+                piece.vertices[f[0]],
+                piece.vertices[f[1]],
+                piece.vertices[f[2]],
+            );
+            let n = (b - a).cross(&(c - a));
+            if n.norm() < 1e-12 {
+                return None;
+            }
+            let outward = if n.dot(&(interior - a)) > 0.0 { -n } else { n }.normalize();
+            Some(outward.dot(&(p - a)))
+        })
+        .fold(f64::NEG_INFINITY, f64::max)
+        - piece.radius
+}
+
+#[test]
+fn old_box_phantom_volumes_are_outside_the_torso_pieces() {
+    // Points the old hand-fitted torso boxes claimed but the mesh never
+    // occupied: behind the gusset's hypotenuse (the old rear-brace box filled
+    // the whole triangle above the diagonal), beside the tapered head top (the
+    // old head box carried the widest extents to the very top), and above the
+    // thin base plate (boxed 28 mm thick for an 8 mm plate). Each must now be
+    // provably clear of every torso piece, so approaching them reads real
+    // clearance instead of false proximity.
+    let probes: [(Point3<f64>, f64); 3] = [
+        (Point3::new(-0.10, 0.0, 0.15), 0.015),
+        (Point3::new(-0.083, 0.075, 0.760), 0.020),
+        (Point3::new(0.05, 0.05, 0.022), 0.003),
+    ];
+    let mut m = model();
+    let pieces = m.world_pieces(&HOME, &HOME).expect("pieces");
+    let torso: &Vec<PlacedPiece> = &pieces
+        .iter()
+        .find(|(name, _)| *name == openarm::TORSO_BODY)
+        .expect("torso body present")
+        .1;
+    for (probe, margin) in probes {
+        let clearance = torso
+            .iter()
+            .map(|piece| outside_by_at_least(piece, &probe))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            clearance >= margin,
+            "phantom probe {probe:?} clears the pieces by {clearance:+.4}, need {margin}"
+        );
+    }
 }
 
 /// Wall-clock budget: a full dual-arm query must stay far inside a control

@@ -6,10 +6,11 @@ use std::collections::{HashMap, HashSet};
 
 use srs_model::nalgebra::Point3;
 
+use crate::clip::ClipRegion;
 use crate::gjk::{self, Hull};
-use crate::{BuildError, ContainmentFailure};
-use crate::hull::{ConvexHull, ConvexPiece, convex_hull, simplified_hull};
+use crate::hull::{ConvexHull, simplified_hull};
 use crate::urdf_collision::{JointKind, UrdfCollisions};
+use crate::{BuildError, ContainmentFailure};
 
 /// Grid cell for hull simplification: points are welded onto this grid before
 /// hulling, recovered by each hull's inflation radius, so a 68k-vertex link
@@ -39,13 +40,14 @@ pub(crate) struct FittedBodies {
 /// Fit all collision bodies. `chains` are the moving-link names per arm (from
 /// FK); every other collision-bearing link must be world-fixed or an attached
 /// child of a chain link, anything else is an error rather than a silently
-/// unmodeled body. `supplied` overrides the auto-fit for named bodies with the
-/// caller's own convex pieces, verified here to contain that body's mesh.
+/// unmodeled body. `supplied` overrides the auto-fit for named bodies with a
+/// clip-region decomposition, whose fitted pieces are verified here to contain
+/// that body's mesh.
 pub(crate) fn fit_bodies(
     urdf: &UrdfCollisions,
     chains: &[Vec<String>],
     meshes_dir: &str,
-    supplied: &HashMap<String, Vec<ConvexPiece>>,
+    supplied: &HashMap<String, Vec<ClipRegion>>,
 ) -> Result<FittedBodies, BuildError> {
     let chain_set: HashSet<&str> = chains.iter().flatten().map(String::as_str).collect();
     let mut body_names: HashSet<String> = HashSet::new();
@@ -100,7 +102,9 @@ pub(crate) fn fit_bodies(
     }
 
     if let Some(unknown) = supplied.keys().find(|k| !body_names.contains(*k)) {
-        return Err(BuildError::UnknownSuppliedBody { name: unknown.clone() });
+        return Err(BuildError::UnknownSuppliedBody {
+            name: unknown.clone(),
+        });
     }
 
     Ok(FittedBodies { fixed, links })
@@ -118,28 +122,43 @@ fn sweep_samples(kind: &JointKind, lo: f64, hi: f64) -> Vec<f64> {
         JointKind::Prismatic | JointKind::OtherMovable => vec![lo, hi],
         JointKind::Revolute => {
             let n = ((hi - lo).abs() / 0.1).ceil().max(1.0) as usize;
-            (0..=n).map(|k| lo + (hi - lo) * (k as f64 / n as f64)).collect()
+            (0..=n)
+                .map(|k| lo + (hi - lo) * (k as f64 / n as f64))
+                .collect()
         }
     }
 }
 
-/// The hulls for one body: the caller's supplied pieces if any (verified to
-/// contain the mesh), otherwise a single simplified hull of the vertex cloud.
+/// The hulls for one body. Without an override: a single simplified hull of the
+/// vertex cloud. With supplied clip regions (a concave body): the mesh surface
+/// is clipped to each region and every clipped slice gets the same rounded
+/// simplified-hull fit, so the pieces track the mesh exactly as the links do,
+/// then the union is verified to contain the mesh.
 fn fit_body(
     name: &str,
     verts: &[Point3<f64>],
-    supplied: &HashMap<String, Vec<ConvexPiece>>,
+    supplied: &HashMap<String, Vec<ClipRegion>>,
 ) -> Result<Vec<Hull>, BuildError> {
-    let Some(pieces) = supplied.get(name) else {
+    let Some(regions) = supplied.get(name) else {
         let rounded = simplified_hull(verts, SIMPLIFY_CELL)?;
         return Ok(vec![Hull::new(&rounded.hull, rounded.radius)?]);
     };
-    if pieces.is_empty() {
-        return Err(BuildError::EmptyHulls { body: name.to_string() });
+    if regions.is_empty() {
+        return Err(BuildError::EmptyRegions {
+            body: name.to_string(),
+        });
     }
-    let mut hulls = Vec::with_capacity(pieces.len());
-    for piece in pieces {
-        hulls.push(Hull::new(&convex_hull(piece.points())?, 0.0)?);
+    let mut hulls = Vec::with_capacity(regions.len());
+    for (index, region) in regions.iter().enumerate() {
+        let points = region.clip_triangles(verts);
+        let rounded = simplified_hull(&points, SIMPLIFY_CELL).map_err(|reason| {
+            BuildError::DegenerateRegion {
+                body: name.to_string(),
+                index,
+                reason,
+            }
+        })?;
+        hulls.push(Hull::new(&rounded.hull, rounded.radius)?);
     }
     verify_contains(name, &hulls, verts)?;
     Ok(hulls)
@@ -290,7 +309,16 @@ mod tests {
         ];
         let e = verify_contains("t", &split_pieces(), &verts)
             .expect_err("bridging face must be rejected");
-        assert!(matches!(&e, BuildError::HullMissesMesh { kind: ContainmentFailure::FaceEscapes, .. }), "{e}");
+        assert!(
+            matches!(
+                &e,
+                BuildError::HullMissesMesh {
+                    kind: ContainmentFailure::FaceEscapes,
+                    ..
+                }
+            ),
+            "{e}"
+        );
     }
 
     #[test]
@@ -314,7 +342,16 @@ mod tests {
         ];
         let e = verify_contains("t", &split_pieces(), &verts)
             .expect_err("a gap vertex must be rejected");
-        assert!(matches!(&e, BuildError::HullMissesMesh { kind: ContainmentFailure::VertexOutside, .. }), "{e}");
+        assert!(
+            matches!(
+                &e,
+                BuildError::HullMissesMesh {
+                    kind: ContainmentFailure::VertexOutside,
+                    ..
+                }
+            ),
+            "{e}"
+        );
     }
 
     #[test]

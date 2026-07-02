@@ -132,7 +132,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .any(|n| n == openarm::TORSO_BODY)
     {
-        builder = builder.hulls(openarm::TORSO_BODY, openarm::torso());
+        builder = builder.regions(openarm::TORSO_BODY, openarm::torso_regions());
     }
     let mut model = builder.build()?;
 
