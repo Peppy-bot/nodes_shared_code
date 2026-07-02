@@ -364,19 +364,29 @@ impl ArmCan {
 
 /// 1 DOF gripper. Open with [`GripperCan::new`], then initialise the motor for the control
 /// mode this generation uses: [`init_motor`](Self::init_motor) (MIT, v1.0) or
-/// [`init_motor_pos_force`](Self::init_motor_pos_force) (POS_FORCE, v2.0).
-pub struct GripperCan(CanHandle);
+/// [`init_motor_pos_force`](Self::init_motor_pos_force) (POS_FORCE, v2.0). The handle
+/// remembers the initialised mode and asserts each command matches it, so a frame can
+/// never be sent in a protocol the motor is not configured for.
+pub struct GripperCan {
+    handle: CanHandle,
+    mode: Option<ControlMode>,
+}
 
 impl GripperCan {
     pub fn new(can_interface: &str, enable_fd: bool) -> Result<Self> {
-        Ok(Self(CanHandle::new(can_interface, enable_fd)?))
+        Ok(Self {
+            handle: CanHandle::new(can_interface, enable_fd)?,
+            mode: None,
+        })
     }
 
     /// Initialise the gripper motor in MIT mode (the v1.0 prismatic gripper).
+    /// Command it with [`mit_control`](Self::mit_control).
     pub fn init_motor(&mut self, motor_type: MotorType, send_id: u32, recv_id: u32) {
         unsafe {
-            inner::openarm_init_gripper_motor(self.0.handle, motor_type as u8, send_id, recv_id);
+            inner::openarm_init_gripper_motor(self.handle.handle, motor_type as u8, send_id, recv_id);
         }
+        self.mode = Some(ControlMode::Mit);
     }
 
     /// Initialise the gripper motor in POS_FORCE mode (the v2.0 revolute pinch gripper).
@@ -384,43 +394,60 @@ impl GripperCan {
     pub fn init_motor_pos_force(&mut self, motor_type: MotorType, send_id: u32, recv_id: u32) {
         unsafe {
             inner::openarm_init_gripper_motor_mode(
-                self.0.handle,
+                self.handle.handle,
                 motor_type as u8,
                 send_id,
                 recv_id,
                 ControlMode::PosForce as u8,
             );
         }
+        self.mode = Some(ControlMode::PosForce);
     }
 
     pub fn enable_all(&mut self) {
-        self.0.enable_all()
+        self.handle.enable_all()
     }
     pub fn disable_all(&mut self) {
-        self.0.disable_all()
+        self.handle.disable_all()
     }
     pub fn recv_all(&mut self, first_timeout_us: i32) {
-        self.0.recv_all(first_timeout_us)
+        self.handle.recv_all(first_timeout_us)
     }
     pub fn refresh_all(&mut self) {
-        self.0.refresh_all()
+        self.handle.refresh_all()
     }
     pub fn set_callback_mode(&mut self, mode: CallbackMode) {
-        self.0.set_callback_mode(mode)
+        self.handle.set_callback_mode(mode)
     }
 
     /// MIT-mode command (v1.0 prismatic gripper): PD to `q`/`dq` plus feedforward `tau`.
+    /// Asserts the motor was initialised with [`init_motor`](Self::init_motor).
     pub fn mit_control(&mut self, kp: f64, kd: f64, q: f64, dq: f64, tau: f64) {
-        unsafe { inner::openarm_gripper_mit_control(self.0.handle, kp, kd, q, dq, tau) }
+        assert_eq!(
+            self.mode,
+            Some(ControlMode::Mit),
+            "mit_control requires init_motor (MIT mode) first"
+        );
+        unsafe { inner::openarm_gripper_mit_control(self.handle.handle, kp, kd, q, dq, tau) }
     }
 
     /// POS_FORCE-mode command (v2.0 pinch gripper): drive to motor angle `q_rad` with an
     /// absolute speed limit `speed_rad_s` and a torque-current limit `torque_pu`
-    /// (per-unit, 0..1). The commanded force is the grip force cap; measured torque comes
-    /// back via [`get_state`](Self::get_state).
+    /// (per-unit, 0..=1; asserted). The commanded force is the grip force cap; measured
+    /// torque comes back via [`get_state`](Self::get_state). Asserts the motor was
+    /// initialised with [`init_motor_pos_force`](Self::init_motor_pos_force).
     pub fn set_position(&mut self, q_rad: f64, speed_rad_s: f64, torque_pu: f64) {
+        assert_eq!(
+            self.mode,
+            Some(ControlMode::PosForce),
+            "set_position requires init_motor_pos_force (POS_FORCE mode) first"
+        );
+        assert!(
+            (0.0..=1.0).contains(&torque_pu),
+            "torque_pu must be per-unit in 0..=1, got {torque_pu}"
+        );
         unsafe {
-            inner::openarm_gripper_pos_force_control(self.0.handle, q_rad, speed_rad_s, torque_pu)
+            inner::openarm_gripper_pos_force_control(self.handle.handle, q_rad, speed_rad_s, torque_pu)
         }
     }
 
@@ -431,7 +458,7 @@ impl GripperCan {
         let mut state = GripperState::default();
         unsafe {
             inner::openarm_gripper_get_state(
-                self.0.handle,
+                self.handle.handle,
                 &mut state.position,
                 &mut state.velocity,
                 &mut state.torque,
