@@ -2,8 +2,8 @@
 //! and their collision meshes, so nodes no longer each ship their own copy.
 //!
 //! Two hardware generations are carried, selected by [`HardwareVersion`]:
-//! - [`HardwareVersion::V1`] — OpenArm v1.0 (`openarm_v10`).
-//! - [`HardwareVersion::V2`] — OpenArm v2.0 (`openarm_v20`).
+//! - [`HardwareVersion::V1`]: OpenArm v1.0 (`openarm_v10`).
+//! - [`HardwareVersion::V2`]: OpenArm v2.0 (`openarm_v20`).
 //!
 //! - [`HardwareVersion::urdf`] returns the bundled URDF string (mechanical joint limits,
 //!   as vendored).
@@ -62,6 +62,19 @@ impl HardwareVersion {
             Self::V1 | Self::V2 => 3,
         }
     }
+
+    /// Full-open jaw width (m) of the generation's gripper; closed is 0. This is
+    /// the aperture the shared gripper interfaces carry: measured between the
+    /// finger pad faces (the flat gripping surfaces), which is where an object's
+    /// fit is decided. It is gripper-linkage data, not a URDF joint limit, so it
+    /// lives here. The v2 value is the modeled pad gap at the finger joints'
+    /// full travel, pending hardware calibration.
+    pub fn jaw_open_m(self) -> f64 {
+        match self {
+            Self::V1 => 0.044,
+            Self::V2 => 0.06,
+        }
+    }
 }
 
 impl fmt::Display for HardwareVersion {
@@ -101,18 +114,18 @@ impl fmt::Display for UnknownHardwareVersion {
 
 impl std::error::Error for UnknownHardwareVersion {}
 
+/// The torso mesh, shared by both generations (the bimanual stand is unchanged).
+/// Embedded once and referenced from both mesh lists; a test asserts the v2.0
+/// asset file stays byte-identical.
+#[cfg(feature = "meshes")]
+const TORSO_MESH: &[u8] = include_bytes!("../assets/meshes/body_link0_symp.stl");
+
 /// The bundled collision meshes as `(file name, bytes)`. The bimanual collision builder
 /// resolves the URDF's `package://` mesh refs by file name against a meshes directory, so
 /// [`HardwareVersion::write_meshes_to`] lays these down under their bare names.
-///
-/// The torso mesh (`body_link0_symp.stl`) is byte-identical across generations (the
-/// bimanual stand is unchanged), so both lists reference the same embedded bytes.
 #[cfg(feature = "meshes")]
 const V1_MESHES: &[(&str, &[u8])] = &[
-    (
-        "body_link0_symp.stl",
-        include_bytes!("../assets/meshes/body_link0_symp.stl"),
-    ),
+    ("body_link0_symp.stl", TORSO_MESH),
     ("finger.stl", include_bytes!("../assets/meshes/finger.stl")),
     (
         "link0_symp.stl",
@@ -153,10 +166,7 @@ const V1_MESHES: &[(&str, &[u8])] = &[
 /// shared torso proxy mesh.
 #[cfg(feature = "meshes")]
 const V2_MESHES: &[(&str, &[u8])] = &[
-    (
-        "body_link0_symp.stl",
-        include_bytes!("../assets/meshes_v20/body_link0_symp.stl"),
-    ),
+    ("body_link0_symp.stl", TORSO_MESH),
     (
         "base_link.stl",
         include_bytes!("../assets/meshes_v20/base_link.stl"),
@@ -243,6 +253,19 @@ mod tests {
                 "{v}: missing shared torso link"
             );
         }
+    }
+
+    #[test]
+    fn jaw_widths_are_positive_and_v2_opens_wider() {
+        assert!(HardwareVersion::V1.jaw_open_m() > 0.0);
+        assert!(HardwareVersion::V2.jaw_open_m() > HardwareVersion::V1.jaw_open_m());
+    }
+
+    #[cfg(feature = "meshes")]
+    #[test]
+    fn v2_torso_asset_stays_byte_identical_to_the_shared_embed() {
+        let v2_file: &[u8] = include_bytes!("../assets/meshes_v20/body_link0_symp.stl");
+        assert_eq!(TORSO_MESH, v2_file);
     }
 
     #[test]

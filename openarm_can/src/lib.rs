@@ -30,7 +30,7 @@ pub enum MotorType {
     DMG6220 = 12,
 }
 
-/// Damiao motor control mode; mirrors `openarm::damiao_motor::ControlMode` — the values
+/// Damiao motor control mode; mirrors `openarm::damiao_motor::ControlMode`; the values
 /// are the on-wire mode ids, do not renumber. The arm and the v1 gripper run [`Mit`];
 /// the v2 pinch gripper runs [`PosForce`] (position command with a speed + force limit).
 ///

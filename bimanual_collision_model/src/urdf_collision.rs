@@ -53,7 +53,7 @@ pub enum JointKind {
     Prismatic,
     /// A bounded rotation about a single axis: its finite limits bound the swept arc,
     /// which the fit samples across (a rotation is not a translation, so extremes alone
-    /// do not bound it — see [`UrdfCollisions::child_vertices_in_parent`]).
+    /// do not bound it; see [`UrdfCollisions::child_vertices_in_parent`]).
     Revolute,
     /// Continuous, planar, floating: motion not bounded to a single finite 1-DOF sweep.
     OtherMovable,
@@ -342,7 +342,7 @@ mod tests {
     fn poses_a_revolute_child_rather_than_rejecting_it() {
         let u = UrdfCollisions::from_urdf(URDF).expect("parse");
         // A revolute child (arm1 hangs off revolute joint `ma`) is now posed by rotation,
-        // so the only failure here is the nonexistent mesh dir — not the joint kind.
+        // so the only failure here is the nonexistent mesh dir, not the joint kind.
         let err = u
             .child_vertices_in_parent("arm1", 0.5, "/nonexistent")
             .expect_err("mesh dir does not exist");
