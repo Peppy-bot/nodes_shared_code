@@ -4,8 +4,9 @@ use crate::error::{Error, ParameterDeserializationError, Result};
 use config::{
     AnyType, NodeArguments,
     consts::{PEPPYGEN_OUTPUT_PATH, RUNTIME_CONFIG_VAR_NAME},
+    launcher::Name,
     node::{NodeConfig, load_standalone_node_config},
-    runtime::{Name, NodeInstanceConfig, RuntimeConfig},
+    runtime::{NodeInstanceConfig, RuntimeConfig},
     validate_node_arguments,
 };
 use std::collections::BTreeMap;

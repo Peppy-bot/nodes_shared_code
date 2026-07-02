@@ -2325,6 +2325,8 @@ version = "0.0.1"
 dependencies = [
  "capnp",
  "clap",
+ "const_format",
+ "dirs",
  "indexmap 2.14.0",
  "serde",
  "serde_json",
