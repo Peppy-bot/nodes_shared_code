@@ -43,17 +43,30 @@ pub enum BuildError {
     #[error("link '{name}' is shared between the two chains")]
     SharedLink { name: String },
 
-    /// Supplied hulls were keyed by a name that is not a collision body.
-    #[error("supplied hulls name '{name}', which is not a collision body")]
+    /// Supplied clip regions were keyed by a name that is not a collision body.
+    #[error("supplied clip regions name '{name}', which is not a collision body")]
     UnknownSuppliedBody { name: String },
 
-    /// Supplied hulls for a body were an empty list.
-    #[error("supplied hulls for '{body}' is empty; provide at least one piece")]
-    EmptyHulls { body: String },
+    /// Supplied clip regions for a body were an empty list.
+    #[error("supplied clip regions for '{body}' are empty; provide at least one region")]
+    EmptyRegions { body: String },
 
-    /// Supplied hulls do not conservatively contain the body's mesh.
-    #[error("supplied hulls for '{body}' do not contain its mesh: {kind}")]
-    HullMissesMesh { body: String, kind: ContainmentFailure },
+    /// A clip region caught too little of its body's mesh to bound a solid
+    /// (an empty, collinear, or coplanar clipped slice).
+    #[error("clip region {index} of '{body}' does not bound a solid slice of its mesh: {reason}")]
+    DegenerateRegion {
+        body: String,
+        index: usize,
+        reason: String,
+    },
+
+    /// The hulls fitted to a body's clip regions do not conservatively contain
+    /// its mesh (the regions leave part of the surface uncovered).
+    #[error("the region hulls for '{body}' do not contain its mesh: {kind}")]
+    HullMissesMesh {
+        body: String,
+        kind: ContainmentFailure,
+    },
 
     /// A name (e.g. an exclusion) did not resolve to a known body.
     #[error("unknown body '{name}'")]

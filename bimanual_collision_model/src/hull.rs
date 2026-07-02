@@ -67,7 +67,10 @@ impl Face {
 
 /// Exact convex hull of `points` (minimal tolerance, every point on or inside).
 /// Errors only on a cloud that spans fewer than three dimensions (collinear or
-/// coplanar), which no solid collision mesh is.
+/// coplanar), which no solid collision mesh is. Production fits go through
+/// [`simplified_hull`]; the exact hull remains the reference the tests build
+/// known-shape pieces with.
+#[cfg(test)]
 pub fn convex_hull(points: &[Point3<f64>]) -> Result<ConvexHull, String> {
     build_hull(points, FRONT_EPS)
 }
@@ -158,40 +161,6 @@ fn max_protrusion(hull: &ConvexHull, points: &[Point3<f64>]) -> f64 {
                 .max(0.0)
         })
         .fold(0.0, f64::max)
-}
-
-/// A convex collision piece a caller supplies for a body in place of the
-/// auto-fit hull: the convex hull of its points is taken as the piece. A body's
-/// supplied pieces must together contain that body's mesh, which is checked at
-/// build time. [`aabb`](Self::aabb) gives the eight corners of an axis-aligned
-/// box, usually all a blocky concave body like a torso needs.
-#[derive(Clone, Debug)]
-pub struct ConvexPiece {
-    points: Vec<Point3<f64>>,
-}
-
-impl ConvexPiece {
-    /// A piece spanning the convex hull of `points`.
-    pub fn from_points(points: Vec<Point3<f64>>) -> ConvexPiece {
-        ConvexPiece { points }
-    }
-
-    /// The axis-aligned box between `min` and `max`, as its eight corners.
-    pub fn aabb(min: Point3<f64>, max: Point3<f64>) -> ConvexPiece {
-        let mut points = Vec::with_capacity(8);
-        for x in [min.x, max.x] {
-            for y in [min.y, max.y] {
-                for z in [min.z, max.z] {
-                    points.push(Point3::new(x, y, z));
-                }
-            }
-        }
-        ConvexPiece { points }
-    }
-
-    pub(crate) fn points(&self) -> &[Point3<f64>] {
-        &self.points
-    }
 }
 
 /// Incremental hull with a tunable visibility tolerance: a point in front of a
@@ -689,19 +658,6 @@ mod tests {
             assert!(
                 d <= 1e-9,
                 "mesh point at true distance {d:+} lies outside the rounded hull (radius {radius})"
-            );
-        }
-    }
-
-    #[test]
-    fn aabb_piece_has_the_eight_box_corners() {
-        let piece = ConvexPiece::aabb(pt(-1.0, -2.0, -3.0), pt(1.0, 2.0, 3.0));
-        let hull = convex_hull(piece.points()).expect("box hull");
-        assert_eq!(hull.vertices.len(), 8, "a box has eight hull vertices");
-        for c in piece.points() {
-            assert!(
-                hull.vertices.iter().any(|v| (v - c).norm() < 1e-12),
-                "corner {c:?} missing"
             );
         }
     }

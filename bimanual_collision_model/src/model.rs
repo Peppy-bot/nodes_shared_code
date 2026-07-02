@@ -20,11 +20,11 @@ use srs_model::nalgebra::{Isometry3, Point3, Vector3};
 use srs_model::{ARM_DOF, Arm, JointVec};
 
 use crate::assemble::fit_bodies;
-use crate::{BuildError, CollisionError};
+use crate::clip::ClipRegion;
 use crate::gjk::{self, Hull, Placed};
-use crate::hull::ConvexPiece;
 use crate::pairs::PairSpec;
 use crate::urdf_collision::UrdfCollisions;
+use crate::{BuildError, CollisionError};
 
 /// How a body's hulls reach the world frame.
 #[derive(Clone, Copy)]
@@ -148,7 +148,7 @@ pub struct Builder {
     left_base: String,
     right_base: String,
     exclude: Vec<PairSpec>,
-    supplied: HashMap<String, Vec<ConvexPiece>>,
+    supplied: HashMap<String, Vec<ClipRegion>>,
 }
 
 impl Builder {
@@ -162,16 +162,18 @@ impl Builder {
         self
     }
 
-    /// Supply convex pieces for a body, replacing its auto-fit hull. The pieces
-    /// must together contain the body's mesh, checked at build. This is how to
-    /// give a concave body (a torso) a tight proxy that a single convex hull
-    /// cannot. Naming a body that does not exist errors at build.
-    pub fn hulls(mut self, body: &str, pieces: Vec<ConvexPiece>) -> Self {
-        self.supplied.insert(body.to_string(), pieces);
+    /// Decompose a body into clip regions, replacing its auto-fit single hull.
+    /// Each region's slice of the mesh gets the same rounded simplified-hull fit
+    /// a link gets, so a concave body (a torso) is bound as tightly as the links
+    /// are, piece by piece. The regions must jointly cover the body's mesh,
+    /// checked at build; see [`ClipRegion`] for the overlap and bound-placement
+    /// rules. Naming a body that does not exist errors at build.
+    pub fn regions(mut self, body: &str, regions: Vec<ClipRegion>) -> Self {
+        self.supplied.insert(body.to_string(), regions);
         self
     }
 
-    /// Fit the bodies (supplied pieces override the auto-fit), derive the checked
+    /// Fit the bodies (supplied regions override the auto-fit), derive the checked
     /// pairs from the structural rules, and apply the exclusions.
     pub fn build(self) -> Result<BimanualCollisionModel, CollisionError> {
         let mut model = BimanualCollisionModel::assemble(
@@ -275,17 +277,19 @@ impl BimanualCollisionModel {
         Ok(model)
     }
 
-    /// Fit every collision body (supplied pieces override the auto-fit) and place
+    /// Fit every collision body (supplied regions override the auto-fit) and place
     /// them, with no checked pairs set yet.
     fn assemble(
         urdf: &str,
         meshes_dir: &str,
         left_base: &str,
         right_base: &str,
-        supplied: &HashMap<String, Vec<ConvexPiece>>,
+        supplied: &HashMap<String, Vec<ClipRegion>>,
     ) -> Result<Self, BuildError> {
         if left_base == right_base {
-            return Err(BuildError::IdenticalBases { base: left_base.to_string() });
+            return Err(BuildError::IdenticalBases {
+                base: left_base.to_string(),
+            });
         }
         let mut left = Arm::from_urdf(urdf, left_base)?;
         let mut right = Arm::from_urdf(urdf, right_base)?;
@@ -309,7 +313,9 @@ impl BimanualCollisionModel {
         let mut bodies: Vec<Body> = Vec::new();
         let push_body = |bodies: &mut Vec<Body>, body: Body| -> Result<(), BuildError> {
             if bodies.iter().any(|b| b.name == body.name) {
-                return Err(BuildError::DuplicateBody { name: body.name.clone() });
+                return Err(BuildError::DuplicateBody {
+                    name: body.name.clone(),
+                });
             }
             bodies.push(body);
             Ok(())
@@ -389,7 +395,9 @@ impl BimanualCollisionModel {
         self.bodies
             .iter()
             .position(|b| b.name == name)
-            .ok_or_else(|| BuildError::UnknownBody { name: name.to_string() })
+            .ok_or_else(|| BuildError::UnknownBody {
+                name: name.to_string(),
+            })
     }
 
     /// Replace the checked pair list (names resolved against the bodies).
@@ -445,7 +453,11 @@ impl BimanualCollisionModel {
     /// FK, then scans the pairs (broadphase-ordered) for the minimum signed
     /// distance. The shared core of [`min_distance`](Self::min_distance) and
     /// [`distance_gradient`](Self::distance_gradient).
-    fn closest(&mut self, q_left: &JointVec, q_right: &JointVec) -> Result<Closest, CollisionError> {
+    fn closest(
+        &mut self,
+        q_left: &JointVec,
+        q_right: &JointVec,
+    ) -> Result<Closest, CollisionError> {
         self.place(q_left, q_right);
 
         // Broadphase: a pair's bounding-sphere gap is a lower bound on its true
@@ -535,7 +547,9 @@ impl BimanualCollisionModel {
         let separation = c.on_b - c.on_a;
         let norm = separation.norm();
         if norm < WITNESS_MIN_SEPARATION {
-            return Err(CollisionError::WitnessesCoincide { distance: c.distance });
+            return Err(CollisionError::WitnessesCoincide {
+                distance: c.distance,
+            });
         }
         // Unit normal along the witness separation (points a -> b). Each witness
         // moves only its own arm; a world-fixed witness (torso) contributes nothing.
@@ -545,8 +559,10 @@ impl BimanualCollisionModel {
         // `distance_gradient_matches_finite_difference`.
         let normal = separation / norm;
         let (place_a, place_b) = (self.bodies[c.a].placement, self.bodies[c.b].placement);
-        let (left_a, right_a) = self.gradient_contribution(place_a, &c.on_a, &normal, 1.0, q_left, q_right);
-        let (left_b, right_b) = self.gradient_contribution(place_b, &c.on_b, &normal, -1.0, q_left, q_right);
+        let (left_a, right_a) =
+            self.gradient_contribution(place_a, &c.on_a, &normal, 1.0, q_left, q_right);
+        let (left_b, right_b) =
+            self.gradient_contribution(place_b, &c.on_b, &normal, -1.0, q_left, q_right);
         Ok(DistanceGradient {
             proximity: Proximity {
                 distance: c.distance,
@@ -679,20 +695,24 @@ mod tests {
             .expect("model")
     }
 
-    // Two boxes that jointly span the padded torso bounding box (split in z), so
-    // they trivially contain the mesh. Just enough to exercise the multi-piece
-    // replacement path; the tuned deployment geometry lives in the shared
-    // tests/fixtures/openarm.rs, exercised by the integration test.
-    fn containing_boxes() -> Vec<ConvexPiece> {
+    const INF: f64 = f64::INFINITY;
+
+    fn region(min: [f64; 3], max: [f64; 3]) -> ClipRegion {
+        ClipRegion::new(
+            Point3::new(min[0], min[1], min[2]),
+            Point3::new(max[0], max[1], max[2]),
+        )
+        .expect("test region")
+    }
+
+    // Two overlapping z-slabs that jointly cover the torso mesh. Just enough to
+    // exercise the multi-piece decomposition path; the tuned deployment regions
+    // live in the shared tests/fixtures/openarm.rs, exercised by the
+    // integration test.
+    fn covering_regions() -> Vec<ClipRegion> {
         vec![
-            ConvexPiece::aabb(
-                Point3::new(-0.157, -0.097, -0.002),
-                Point3::new(0.097, 0.097, 0.404),
-            ),
-            ConvexPiece::aabb(
-                Point3::new(-0.157, -0.097, 0.396),
-                Point3::new(0.097, 0.097, 0.775),
-            ),
+            region([-INF, -INF, -INF], [INF, INF, 0.404]),
+            region([-INF, -INF, 0.396], [INF, INF, INF]),
         ]
     }
 
@@ -715,9 +735,18 @@ mod tests {
         // tie where the single-pair analytic gradient and the straddling central
         // difference legitimately disagree, so it would not be a valid check.
         let configs: [(JointVec, JointVec); 3] = [
-            ([0.15, 0.1, 0.85, 0.5, -0.2, 0.1, 0.0], [-0.05, -0.25, -0.45, 0.35, 0.1, -0.1, 0.0]),
-            ([0.0, 0.3, 0.95, 0.45, 0.1, 0.0, 0.0], [0.0, -0.1, -0.55, 0.4, 0.0, 0.1, 0.0]),
-            ([0.25, -0.1, 0.6, 0.65, 0.0, 0.2, 0.1], [-0.1, 0.05, -0.7, 0.3, 0.0, -0.2, 0.0]),
+            (
+                [0.15, 0.1, 0.85, 0.5, -0.2, 0.1, 0.0],
+                [-0.05, -0.25, -0.45, 0.35, 0.1, -0.1, 0.0],
+            ),
+            (
+                [0.0, 0.3, 0.95, 0.45, 0.1, 0.0, 0.0],
+                [0.0, -0.1, -0.55, 0.4, 0.0, 0.1, 0.0],
+            ),
+            (
+                [0.25, -0.1, 0.6, 0.65, 0.0, 0.2, 0.1],
+                [-0.1, 0.05, -0.7, 0.3, 0.0, -0.2, 0.0],
+            ),
         ];
         for (ql, qr) in configs {
             let grad = m.distance_gradient(&ql, &qr).expect("gradient defined");
@@ -737,8 +766,16 @@ mod tests {
                 let fd_right = (m.min_distance(&ql, &rp).unwrap().distance
                     - m.min_distance(&ql, &rm).unwrap().distance)
                     / (2.0 * h);
-                assert!((analytic_left[j] - fd_left).abs() < 3e-3, "left j{j}: analytic {} fd {fd_left}", analytic_left[j]);
-                assert!((analytic_right[j] - fd_right).abs() < 3e-3, "right j{j}: analytic {} fd {fd_right}", analytic_right[j]);
+                assert!(
+                    (analytic_left[j] - fd_left).abs() < 3e-3,
+                    "left j{j}: analytic {} fd {fd_left}",
+                    analytic_left[j]
+                );
+                assert!(
+                    (analytic_right[j] - fd_right).abs() < 3e-3,
+                    "right j{j}: analytic {} fd {fd_right}",
+                    analytic_right[j]
+                );
             }
         }
     }
@@ -769,7 +806,10 @@ mod tests {
         .build()
         .err()
         .expect("identical bases must fail");
-        assert!(matches!(&e, CollisionError::Build(BuildError::IdenticalBases { .. })), "{e}");
+        assert!(
+            matches!(&e, CollisionError::Build(BuildError::IdenticalBases { .. })),
+            "{e}"
+        );
     }
 
     #[test]
@@ -814,70 +854,107 @@ mod tests {
     }
 
     #[test]
-    fn supplied_hulls_replace_the_auto_fit() {
+    fn supplied_regions_replace_the_auto_fit() {
         let m = BimanualCollisionModel::builder(
             URDF,
             MESHES,
             "openarm_left_link0",
             "openarm_right_link0",
         )
-        .hulls("openarm_body_link0", containing_boxes())
+        .regions("openarm_body_link0", covering_regions())
         .build()
-        .expect("supplied torso boxes contain the mesh");
+        .expect("covering torso regions contain the mesh");
         assert_eq!(
             m.local_hulls("openarm_body_link0").expect("torso").len(),
             2,
-            "torso uses the two supplied boxes"
+            "torso uses the two supplied region pieces"
         );
     }
 
     #[test]
-    fn rejects_supplied_hulls_that_miss_the_mesh() {
-        let tiny = vec![ConvexPiece::aabb(
-            Point3::new(-0.01, -0.01, 0.0),
-            Point3::new(0.01, 0.01, 0.02),
-        )];
+    fn rejects_regions_that_leave_mesh_uncovered() {
+        // Only the lower torso is clipped in; the head vertices escape.
+        let lower_only = vec![region([-INF, -INF, -INF], [INF, INF, 0.3])];
         let e = BimanualCollisionModel::builder(
             URDF,
             MESHES,
             "openarm_left_link0",
             "openarm_right_link0",
         )
-        .hulls("openarm_body_link0", tiny)
+        .regions("openarm_body_link0", lower_only)
         .build()
         .err()
-        .expect("a too-small hull must be rejected");
-        assert!(matches!(&e, CollisionError::Build(BuildError::HullMissesMesh { .. })), "{e}");
+        .expect("under-covering regions must be rejected");
+        assert!(
+            matches!(&e, CollisionError::Build(BuildError::HullMissesMesh { .. })),
+            "{e}"
+        );
     }
 
     #[test]
-    fn rejects_supplied_hulls_for_unknown_body() {
+    fn rejects_a_region_that_clips_nothing() {
+        // The second region floats above the whole robot: its slice of the mesh
+        // is empty, which cannot bound a solid piece.
+        let with_empty = vec![
+            region([-INF, -INF, -INF], [INF, INF, INF]),
+            region([-INF, -INF, 5.0], [INF, INF, 6.0]),
+        ];
         let e = BimanualCollisionModel::builder(
             URDF,
             MESHES,
             "openarm_left_link0",
             "openarm_right_link0",
         )
-        .hulls("no_such_body", containing_boxes())
+        .regions("openarm_body_link0", with_empty)
+        .build()
+        .err()
+        .expect("an empty slice must be rejected");
+        assert!(
+            matches!(
+                &e,
+                CollisionError::Build(BuildError::DegenerateRegion { index: 1, .. })
+            ),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn rejects_supplied_regions_for_unknown_body() {
+        let e = BimanualCollisionModel::builder(
+            URDF,
+            MESHES,
+            "openarm_left_link0",
+            "openarm_right_link0",
+        )
+        .regions("no_such_body", covering_regions())
         .build()
         .err()
         .expect("unknown body must fail");
-        assert!(matches!(&e, CollisionError::Build(BuildError::UnknownSuppliedBody { .. })), "{e}");
+        assert!(
+            matches!(
+                &e,
+                CollisionError::Build(BuildError::UnknownSuppliedBody { .. })
+            ),
+            "{e}"
+        );
     }
 
     #[test]
-    fn rejects_empty_supplied_hulls() {
+    fn rejects_empty_supplied_regions() {
         let e = BimanualCollisionModel::builder(
             URDF,
             MESHES,
             "openarm_left_link0",
             "openarm_right_link0",
         )
-        .hulls("openarm_body_link0", Vec::new())
+        .regions("openarm_body_link0", Vec::new())
         .build()
         .err()
-        .expect("empty pieces must fail");
-        assert!(matches!(&e, CollisionError::Build(BuildError::EmptyHulls { .. })), "{e}");
+        .expect("an empty region list must fail");
+        assert!(
+            matches!(&e, CollisionError::Build(BuildError::EmptyRegions { .. })),
+            "{e}"
+        );
     }
 
     #[test]
@@ -978,7 +1055,10 @@ mod tests {
         let e = excluding(&[PairSpec::new("openarm_left_link0", "no_such_link")])
             .err()
             .expect("unknown body must fail");
-        assert!(matches!(&e, CollisionError::Build(BuildError::UnknownBody { .. })), "{e}");
+        assert!(
+            matches!(&e, CollisionError::Build(BuildError::UnknownBody { .. })),
+            "{e}"
+        );
     }
 
     #[test]
