@@ -347,8 +347,8 @@ mod tests {
             .child_vertices_in_parent("arm1", 0.5, "/nonexistent")
             .expect_err("mesh dir does not exist");
         assert!(
-            !err.contains("not a translation") && !err.contains("cannot be bounded"),
-            "revolute should be handled, got: {err}"
+            err.contains("/nonexistent"),
+            "the revolute path must reach mesh loading and fail on the missing dir, got: {err}"
         );
     }
 
